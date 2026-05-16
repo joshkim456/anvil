@@ -1,0 +1,18 @@
+# Node / frontend
+node_modules/
+dist/
+*.local
+.vite/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Anvil runtime data (instances, downloaded jars, caches)
+.anvil/
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
