@@ -230,7 +230,17 @@ pub enum Trigger {
 /// and the token's `anvil_token` value all derive from it, so they agree
 /// byte-for-byte across validate / emit / the authored allowlist.
 pub fn content_hex(chapter_id: &str, node_id: &str) -> String {
-    stable_hex(&format!("{chapter_id}:{node_id}:content"))
+    // LOWERCASE: this hex flows into Minecraft resource paths
+    // (`data/anvil/functions/<hex>_summon.mcfunction`, advancements, the
+    // `minecraft:tick` tag values, the `anvil:<hex>_*` function refs). MC
+    // 1.20.1 resource locations are `[a-z0-9._/-]` ONLY — `stable_hex`
+    // emits `{:016X}` (uppercase), so an un-lowered hex makes Minecraft
+    // reject EVERY content function/advancement ("Invalid path in pack …
+    // ignoring") and the boss/altar/summon system silently does nothing
+    // (observed 2026-05-18). Lowercasing at this single keying point keeps
+    // every derived id (paths, refs, boss Tag, token, objective) in
+    // byte-agreement — just valid.
+    stable_hex(&format!("{chapter_id}:{node_id}:content")).to_lowercase()
 }
 
 /// A derived `anvil:<hex>_<suffix>` id (function / advancement).
@@ -761,6 +771,23 @@ pub fn to_openloader_files(
             s,
         ));
     }
+
+    // Recurrence guard (advisor 2026-05-18): every emitted datapack path
+    // MUST be a valid MC 1.20.1 resource path — `[a-z0-9._/-]` only. An
+    // uppercase hex here is silently dropped by Minecraft ("Invalid path in
+    // pack … ignoring"), which is exactly how the summon system died. Fail
+    // loud in debug instead of shipping a dead datapack.
+    debug_assert!(
+        out.iter().all(|(p, _)| p
+            .bytes()
+            .all(|b| b.is_ascii_lowercase()
+                || b.is_ascii_digit()
+                || matches!(b, b'.' | b'_' | b'/' | b'-'))),
+        "content datapack emitted a non-lowercase / invalid resource path: {:?}",
+        out.iter()
+            .map(|(p, _)| p)
+            .find(|p| p.bytes().any(|b| b.is_ascii_uppercase()))
+    );
 
     out
 }

@@ -3096,33 +3096,41 @@ pub(crate) fn spawn_registry_dump_detached(
         >();
         drop(lrx);
 
-        let dump =
-            match crate::launch::registry_dump_pass(&inst, &mr, ltx).await {
-                Ok(d) => d,
-                // registry_dump_pass already degrades internally; an Err here
-                // is unexpected but still must not touch the cache.
-                Err(_) => return,
-            };
-        // Only a real dump rewrites the cache (degrade => leave static).
-        let Some(dump_dir) = dump else { return };
-
-        // Reconcile the CURRENT static scan with the live dump, then
-        // atomically replace the cache (temp file + rename) so a crash
-        // mid-write never leaves a half-written, mis-parsed registry.
-        let static_scan =
-            crate::registry::scan_instance(&inst, &instance_dir(&id));
-        let reconciled =
-            crate::registry::reconcile_scan(static_scan, Some(&dump_dir));
-        if let Ok(txt) = serde_json::to_string(&reconciled) {
-            let tmp = cache_path.with_extension("json.tmp");
-            if std::fs::write(&tmp, &txt).is_ok() {
-                let _ = std::fs::rename(&tmp, &cache_path);
+        // Detached/background: wait_for_jvm=false (skip on JVM contention —
+        // the next assemble/edit re-triggers). Only a real Dumped verdict
+        // rewrites the cache; every other verdict leaves the static scan in
+        // place exactly as before (the gate, not this pass, is what BLOCKS).
+        match crate::launch::registry_dump_pass(&inst, &mr, false, ltx).await {
+            Ok(crate::launch::DumpOutcome::Dumped(dump_dir)) => {
+                reconcile_dump_into_cache(&inst, &id, &dump_dir);
             }
+            _ => return,
         }
-        // The throwaway server dir is large; reclaim it (non-fatal).
-        let _ =
-            std::fs::remove_dir_all(instance_dir(&id).join(".anvil-dump"));
     });
+}
+
+/// Reconcile the CURRENT static scan with a live `/dump registry` dir, then
+/// atomically replace `<instance>/anvil-registry.json` (temp file + rename so
+/// a crash mid-write never leaves a half-written, mis-parsed registry), and
+/// reclaim the large throwaway server dir. Shared by the detached background
+/// pass and the pre-quest gate so the two paths can never diverge.
+pub(crate) fn reconcile_dump_into_cache(
+    inst: &Instance,
+    id: &str,
+    dump_dir: &std::path::Path,
+) {
+    let cache_path = instance_dir(id).join("anvil-registry.json");
+    let static_scan =
+        crate::registry::scan_instance(inst, &instance_dir(id));
+    let reconciled =
+        crate::registry::reconcile_scan(static_scan, Some(dump_dir));
+    if let Ok(txt) = serde_json::to_string(&reconciled) {
+        let tmp = cache_path.with_extension("json.tmp");
+        if std::fs::write(&tmp, &txt).is_ok() {
+            let _ = std::fs::rename(&tmp, &cache_path);
+        }
+    }
+    let _ = std::fs::remove_dir_all(instance_dir(id).join(".anvil-dump"));
 }
 
 async fn tool_assemble_pack(

@@ -486,9 +486,22 @@ fn harvest_lang(ns: &str, body: &str, vocab: &mut RegistryVocab) {
         if key_ns != ns || rest.is_empty() {
             continue;
         }
-        // mod lang sometimes nests deeper (e.g. `item.ns.a.b`); the registry
-        // path uses `.`→`.` not `/` for items, but vanilla/most mods use a
-        // flat path. Keep the rest verbatim as the id path.
+        // A concrete registered id's translation key is
+        // `<domain>.<ns>.<flatpath>` — `rest` is a SINGLE segment for the
+        // overwhelming majority of mods/vanilla. A `.` inside `rest` means a
+        // NESTED lang sub-key (`sleeping_bag.auto_use.tooltip`, `<id>.state`,
+        // `<id>.desc`, …), NOT a registry id — harvesting it into an id
+        // bucket is exactly the pollution that let
+        // `comforts:sleeping_bag.auto_use.tooltip` masquerade as an item and
+        // ship a quest that crashed world creation. Nested keys are dropped
+        // from BOTH id buckets and labels (the real flat id's own key still
+        // provides its label). Accepted tradeoff: a rare mod using a
+        // `/`-subdir item path (`item.ns.tools.wrench`) is missed by the
+        // STATIC scan — the authoritative `/dump registry` (Slice 1.5) is
+        // the real id source; this is only the hardened offline fallback.
+        if rest.contains('.') {
+            continue;
+        }
         let id = format!("{ns}:{rest}");
         let target = match domain {
             "item" => Some(&mut vocab.items),

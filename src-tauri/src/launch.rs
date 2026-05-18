@@ -276,6 +276,33 @@ pub enum SmokeVerdict {
     Inconclusive { reason: String },
 }
 
+/// The verdict of the headless dedicated-server registry-dump boot. Unlike
+/// the title-screen client `SmokeVerdict`, this boot reaches spawn-region
+/// generation (a Fabric server only prints the ready line after
+/// `Preparing spawn area`), so it exercises WORLD CREATION — the failure
+/// class that `smoke_test` is structurally blind to.
+#[derive(Debug, Clone)]
+pub enum DumpOutcome {
+    /// Reached the ready line and `/dump registry` produced `dump/`. The pack
+    /// generated a world cleanly AND the real runtime registry is captured.
+    Dumped(std::path::PathBuf),
+    /// A crash was classified during the boot (e.g. a `NoClassDefFoundError`
+    /// on entity-load during spawn prep — the world-creation crash class).
+    Crashed {
+        mod_name: Option<String>,
+        reason: String,
+    },
+    /// Could not even start the pass: loader not Fabric/Quilt, offline /
+    /// helper-jar or server-jar or JRE unavailable, JVM contention with
+    /// `wait_for_jvm == false`, or spawn failed. We could NOT try — proceeding
+    /// on the static scan WITH a surfaced caveat is acceptable.
+    EnvUnavailable(String),
+    /// Booted but produced no proof: timed out, or the stream ended with no
+    /// ready line and no classified crash. We tried and got nothing — NOT
+    /// safe to assume the pack works.
+    Failed(String),
+}
+
 /// Boot the pack once and watch for an early failure vs the mods-initialized
 /// milestone. Reuses the exact `launch` preparation path. Kills the process
 /// as soon as there is a verdict (or on timeout).
@@ -518,17 +545,27 @@ async fn drive_dump_server(
     server_launcher: &Path,
     grace: std::time::Duration,
     timeout: std::time::Duration,
+    wait_for_jvm: bool,
     tx: &UnboundedSender<LaunchEvent>,
-) -> Result<Option<PathBuf>> {
-    // Single-JVM guard. Contended → another JVM is up; skip (the next assemble
-    // re-triggers). This is the OOM defense, not a correctness gate.
-    let _jvm_guard = match jvm_lock().try_lock() {
-        Ok(g) => g,
-        Err(_) => {
-            let _ = tx.send(LaunchEvent::Status(
-                "Registry dump skipped (another JVM is running)".into(),
-            ));
-            return Ok(None);
+) -> Result<DumpOutcome> {
+    // Single-JVM guard (the OOM defense — two modded JVMs co-booting OOMs an
+    // 8-16 GB machine). The detached background pass `try_lock`s and treats
+    // contention as `EnvUnavailable` (the next assemble re-triggers). A GATED
+    // caller (verify_pack / the pre-quest gate) passes `wait_for_jvm` so a
+    // queued boot waits instead of silently skipping the only verification.
+    let _jvm_guard = if wait_for_jvm {
+        jvm_lock().lock().await
+    } else {
+        match jvm_lock().try_lock() {
+            Ok(g) => g,
+            Err(_) => {
+                let _ = tx.send(LaunchEvent::Status(
+                    "Registry dump skipped (another JVM is running)".into(),
+                ));
+                return Ok(DumpOutcome::EnvUnavailable(
+                    "another JVM is already running".into(),
+                ));
+            }
         }
     };
 
@@ -545,11 +582,13 @@ async fn drive_dump_server(
     {
         Ok(c) => c,
         Err(e) => {
-            // Could not even spawn → degrade, never propagate.
+            // Could not even spawn → could-not-try, never propagate.
             let _ = tx.send(LaunchEvent::Status(format!(
                 "Registry dump skipped (spawn failed: {e})"
             )));
-            return Ok(None);
+            return Ok(DumpOutcome::EnvUnavailable(format!(
+                "could not spawn the server JVM: {e}"
+            )));
         }
     };
 
@@ -588,15 +627,19 @@ async fn drive_dump_server(
             let mut requested_stop = false;
             while let Some(line) = lrx.recv().await {
                 // A failure class we already classify (incompatible mods,
-                // entrypoint crash, crash report) → bail, degrade to None.
-                if let SmokeSignal::Failure { reason, .. } =
+                // entrypoint crash, crash report, a fatal NoClassDefFound on
+                // entity-load during spawn prep — the world-creation crash
+                // class). This loop keeps scanning every line, so a crash
+                // AFTER the ready line / during the post-`stop` grace is also
+                // caught here, not missed.
+                if let SmokeSignal::Failure { mod_name, reason } =
                     classify_smoke_line(&line)
                 {
                     let _ = tx.send(LaunchEvent::Status(format!(
                         "Registry dump aborted: {reason}"
                     )));
                     let _ = tx.send(LaunchEvent::Log(line));
-                    return None;
+                    return DumpOutcome::Crashed { mod_name, reason };
                 }
                 let ready = is_server_ready_line(&line);
                 let _ = tx.send(LaunchEvent::Log(line));
@@ -620,18 +663,28 @@ async fn drive_dump_server(
             // Stream ended. A clean `stop` after a dump leaves `dump/` behind;
             // its presence is the success signal (a crash never writes it).
             if requested_stop && dump_dir_buf.join("dump").is_dir() {
-                Some(dump_dir_buf.clone())
+                DumpOutcome::Dumped(dump_dir_buf.clone())
             } else {
-                None
+                // Booted but no ready line / no usable dump and no classified
+                // crash: we tried and got no proof. NOT "unavailable".
+                DumpOutcome::Failed(
+                    "the server exited before producing a usable registry \
+                     dump (no ready line, no recognized crash)"
+                        .into(),
+                )
             }
         };
         match tokio::time::timeout(timeout, drive).await {
             Ok(v) => v,
             Err(_) => {
                 let _ = tx.send(LaunchEvent::Status(
-                    "Registry dump timed out — keeping static registry".into(),
+                    "Registry dump timed out".into(),
                 ));
-                None
+                DumpOutcome::Failed(
+                    "the verification boot did not finish within the time \
+                     budget"
+                        .into(),
+                )
             }
         }
     };
@@ -641,10 +694,15 @@ async fn drive_dump_server(
     let _ = child.wait().await;
 
     match &outcome {
-        Some(_) => {
+        DumpOutcome::Dumped(_) => {
             let _ = tx.send(LaunchEvent::Status("Registry dump captured".into()));
         }
-        None => {
+        DumpOutcome::Crashed { .. } => {
+            let _ = tx.send(LaunchEvent::Status(
+                "Pack crashed during the verification boot".into(),
+            ));
+        }
+        DumpOutcome::EnvUnavailable(_) | DumpOutcome::Failed(_) => {
             let _ = tx.send(LaunchEvent::Status(
                 "Registry dump unavailable — using static registry".into(),
             ));
@@ -661,11 +719,15 @@ async fn drive_dump_server(
 pub async fn registry_dump_pass(
     instance: &Instance,
     mr: &crate::modrinth::Modrinth,
+    wait_for_jvm: bool,
     tx: UnboundedSender<LaunchEvent>,
-) -> Result<Option<PathBuf>> {
+) -> Result<DumpOutcome> {
     // Only Fabric/Quilt expose a server launcher we can drive this way.
     if !matches!(instance.loader.as_str(), "fabric" | "quilt") {
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(format!(
+            "loader '{}' has no headless server boot (Anvil v1 is Fabric)",
+            instance.loader
+        )));
     }
 
     // One up-front chip so the user knows a background network/CPU job started
@@ -687,12 +749,18 @@ pub async fn registry_dump_pass(
         let _ = tx.send(LaunchEvent::Status(format!(
             "Registry dump skipped (mkdir failed: {e})"
         )));
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(format!(
+            "could not create the dump working dir: {e}"
+        )));
     }
 
     let client = match http_client() {
         Ok(c) => c,
-        Err(_) => return Ok(None),
+        Err(e) => {
+            return Ok(DumpOutcome::EnvUnavailable(format!(
+                "no HTTP client for helper-jar fetch: {e}"
+            )))
+        }
     };
 
     // Populate the throwaway mods/ with the FULL pinned modpack.
@@ -747,7 +815,9 @@ pub async fn registry_dump_pass(
         let _ = tx.send(LaunchEvent::Status(format!(
             "Registry dump skipped (helper mod unavailable: {e})"
         )));
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(format!(
+            "registry-dump helper mod unavailable: {e}"
+        )));
     }
     if let Err(e) = resolve_helper_jar(
         mr,
@@ -761,7 +831,9 @@ pub async fn registry_dump_pass(
         let _ = tx.send(LaunchEvent::Status(format!(
             "Registry dump skipped (Fabric API unavailable: {e})"
         )));
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(format!(
+            "Fabric API (dump helper dependency) unavailable: {e}"
+        )));
     }
 
     // EULA + properties BEFORE first boot (a server refuses to start without
@@ -776,7 +848,9 @@ pub async fn registry_dump_pass(
         .await
         .is_err()
     {
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(
+            "could not write eula.txt / server.properties".into(),
+        ));
     }
 
     // Fabric's PRE-BUILT server launcher jar (loader + installer baked in) —
@@ -790,7 +864,9 @@ pub async fn registry_dump_pass(
         let _ = tx.send(LaunchEvent::Status(format!(
             "Registry dump skipped (server launcher unavailable: {e})"
         )));
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(format!(
+            "Fabric server launcher unavailable: {e}"
+        )));
     }
     // The launcher needs the Mojang server jar present too; piston-meta's
     // `downloads.server`. (The Fabric launcher fetches it itself when online,
@@ -799,7 +875,9 @@ pub async fn registry_dump_pass(
         let _ = tx.send(LaunchEvent::Status(format!(
             "Registry dump skipped (server jar unresolved: {e})"
         )));
-        return Ok(None);
+        return Ok(DumpOutcome::EnvUnavailable(format!(
+            "Mojang server jar unresolved: {e}"
+        )));
     }
 
     // Java 17 for 1.20.1 — reuse the launcher's own provisioner/cache.
@@ -809,7 +887,9 @@ pub async fn registry_dump_pass(
             let _ = tx.send(LaunchEvent::Status(format!(
                 "Registry dump skipped (JRE unavailable: {e})"
             )));
-            return Ok(None);
+            return Ok(DumpOutcome::EnvUnavailable(format!(
+                "no JRE for the verification boot: {e}"
+            )));
         }
     };
 
@@ -825,6 +905,7 @@ pub async fn registry_dump_pass(
         &server_launcher,
         std::time::Duration::from_secs(8),
         std::time::Duration::from_secs(300),
+        wait_for_jvm,
         &tx,
     )
     .await
@@ -2467,7 +2548,7 @@ mod smoke_tests {
 mod dump_tests {
     use super::{
         drive_dump_server, eula_bytes, is_server_ready_line,
-        server_properties_bytes, LaunchEvent,
+        server_properties_bytes, DumpOutcome, LaunchEvent,
     };
 
     /// Regression-lock the EXACT server.properties bytes — `level-type=flat`
@@ -2570,12 +2651,16 @@ exit 0
             std::path::Path::new("unused-launcher.jar"),
             std::time::Duration::from_millis(50), // grace
             std::time::Duration::from_secs(10),   // test-shortened timeout
+            false,                                // try_lock (serialized tests)
             &tx,
         )
         .await
         .expect("driver never errors");
 
-        let got = out.expect("clean stop returns Ok(Some(dir))");
+        let got = match out {
+            DumpOutcome::Dumped(d) => d,
+            o => panic!("expected Dumped, got {o:?}"),
+        };
         assert_eq!(got, dump_dir);
 
         // stdin order: `/dump registry` strictly before `stop`.
@@ -2643,11 +2728,15 @@ exit 0
             std::path::Path::new("unused-launcher.jar"),
             std::time::Duration::from_millis(50), // grace
             std::time::Duration::from_secs(10),   // test-shortened timeout
+            false,                                // try_lock (serialized tests)
             &tx,
         )
         .await
         .expect("driver never errors");
-        let got = out.expect("clean stop returns Ok(Some(dir))");
+        let got = match out {
+            DumpOutcome::Dumped(d) => d,
+            o => panic!("expected Dumped, got {o:?}"),
+        };
 
         // Seed `foo` into `unscanned` so the "removed from unscanned"
         // assertion actually discriminates (default ScanResult is empty, which
@@ -2704,12 +2793,16 @@ exit 0
             std::path::Path::new("unused.jar"),
             std::time::Duration::from_millis(50),
             std::time::Duration::from_millis(800), // short timeout
+            false,
             &tx,
         )
         .await
         .expect("driver never errors");
 
-        assert!(out.is_none(), "no ready line → Ok(None)");
+        assert!(
+            matches!(out, DumpOutcome::Failed(_)),
+            "no ready line + timeout → Failed (tried, no proof), got {out:?}"
+        );
         assert!(
             !dump_dir.join("dump").exists(),
             "a failed pass must not leave a dump/ to be parsed as truth"
