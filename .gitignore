@@ -21,3 +21,6 @@ src-tauri/gen/
 *.log
 .idea/
 .vscode/
+
+# Local design/working docs (not published)
+claude context files/

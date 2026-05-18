@@ -133,9 +133,6 @@ src-tauri/src/
   keybinds.rs             default Minecraft keybind options
   settings.rs             settings + on-disk paths
 src-tauri/tests/          real-data fixtures (Modrinth + codec shapes)
-claude context files/     design docs: feature_spec.md,
-                          progression_system_design.md,
-                          progression_detection_spec.md
 ```
 
 ## Tech stack
@@ -148,8 +145,6 @@ claude context files/     design docs: feature_spec.md,
 
 ## Roadmap
 
-Phased plans in [`claude context files/feature_spec.md`](./claude%20context%20files/feature_spec.md)
-and [`progression_system_design.md`](./claude%20context%20files/progression_system_design.md).
 Next: end-to-end in-game verification of authored progression, per-genre
 chapter-archetype adaptation, Forge/NeoForge launch, JRE auto-provisioning,
 SQLite catalog cache, OS-keychain secret storage.
