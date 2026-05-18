@@ -1829,6 +1829,7 @@ fn to_resolved(
                 dependency_type: d.dependency_type.clone(),
             })
             .collect(),
+        version_number: v.version_number.clone(),
         version_type: v.version_type.clone(),
         date_published: v.date_published.clone(),
     })
@@ -2602,6 +2603,27 @@ async fn resolve_pack_with_state(
                         if !crate::registry::is_open_ended_range(range) {
                             continue;
                         }
+                        if let Some(&pid) = owner.get(modid.as_str()) {
+                            if !pool_complete_for.contains(pid) {
+                                floor_relevant.insert(pid.to_string());
+                            }
+                        }
+                    }
+                }
+                // Step 4: also expand owners of GENERALLY-violated modids so
+                // the expressed-constraint re-pin has real candidates — a
+                // bounded range like `>=0.5.11 <0.6` is NOT open-ended so the
+                // loop above misses Sodium. Precise (only modids
+                // check_version_constraints actually flags ⇒ no balloon) and
+                // reuses Step 3's logic rather than a new heuristic.
+                for iss in
+                    pack::check_version_constraints(&entries, manifests)
+                {
+                    if let pack::ValidationIssue::VersionConstraintUnsatisfied {
+                        modid,
+                        ..
+                    } = iss
+                    {
                         if let Some(&pid) = owner.get(modid.as_str()) {
                             if !pool_complete_for.contains(pid) {
                                 floor_relevant.insert(pid.to_string());

@@ -187,6 +187,10 @@ pub struct ResolvedVersion {
     pub client_side: String,
     pub server_side: String,
     pub dependencies: Vec<DepEdge>,
+    /// Modrinth's `version_number` (the real semantic version string, e.g.
+    /// `0.5.13+mc1.20.1`). Carried so general constraint satisfaction compares
+    /// the TRUE version, not a fragile filename parse.
+    pub version_number: String,
     /// "release" | "beta" | "alpha". Used to prefer stable dependency versions.
     pub version_type: String,
     /// RFC3339 publish timestamp. Used to pick the newest compatible version
@@ -404,6 +408,121 @@ pub fn version_floor_repins(
     let mut repins: Vec<(String, String)> = Vec::new();
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
+    // --- General version-constraint re-pin (Step 4) -------------------------
+    // The EXPRESSED-constraint layer: for a modid whose currently-chosen
+    // top-level provider violates a `depends` range (or sits inside a
+    // `breaks` range), re-pin that provider to the newest pooled version
+    // whose REAL version (threaded `version_number`, not a filename parse)
+    // satisfies the conjunction of EVERY depends range ∧ no breaks range on
+    // that modid. This is what fixes the Indium/Immersive-Portals/Sodium
+    // class (Sodium 0.5.13 ∈ [0.5.11,0.6) ∧ ≠ the IP break) automatically.
+    //
+    // It does NOT push issues: if it cannot satisfy the conjunction it simply
+    // does not re-pin, and `check_version_constraints` (run on the final
+    // closure) emits the precise hard `VersionConstraintUnsatisfied` — one
+    // source of truth, no double-report.
+    //
+    // TOP-LEVEL owners only. A JIJ-bundled modid (its version lives inside
+    // another project's jar, e.g. fabric-lifecycle-events-v1 in fabric-api)
+    // is left to that hard block — auto-fixing it needs an async
+    // materialize-each-candidate walk (Step 4.5, deferred). The FLK + date
+    // blocks below stay: they recover the open-ended-major break that NO
+    // metadata expresses (`>=1.9.2+kotlin.1.8.10` is satisfied by Kotlin-2.x
+    // under correct semver — the general layer cannot infer that floor).
+    {
+        use crate::version::{satisfies, Version, VersionReq};
+        let mut dep_ranges: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut brk_ranges: HashMap<&str, Vec<&str>> = HashMap::new();
+        for man in manifests.values() {
+            for (modid, range) in &man.requires {
+                dep_ranges
+                    .entry(modid.as_str())
+                    .or_default()
+                    .push(range.as_str());
+            }
+            for (modid, range) in &man.breaks {
+                brk_ranges
+                    .entry(modid.as_str())
+                    .or_default()
+                    .push(range.as_str());
+            }
+        }
+        let mut targets: Vec<&str> =
+            dep_ranges.keys().copied().collect();
+        targets.sort();
+        for modid in targets {
+            let Some(&owner_pid) = owner.get(modid) else {
+                continue;
+            };
+            if already.contains(owner_pid)
+                || repins.iter().any(|(p, _)| p == owner_pid)
+            {
+                continue;
+            }
+            // Only when the owner's OWN modid is M (top-level). If M is only
+            // provided as a JIJ sub-module, owner.provided.first() != M ⇒
+            // skip (Step 3 blocks it; Step 4.5 will auto-fix).
+            let owner_is_self = manifests
+                .get(owner_pid)
+                .and_then(|m| m.provided.first())
+                .map(|(id, _)| id == modid)
+                .unwrap_or(false);
+            if !owner_is_self {
+                continue;
+            }
+            let Some(cur) = chosen_by.get(owner_pid) else {
+                continue;
+            };
+            let Some(cur_v) = Version::parse(&cur.version_number) else {
+                continue;
+            };
+            let deps: Vec<VersionReq> = dep_ranges
+                .get(modid)
+                .into_iter()
+                .flatten()
+                .filter_map(|r| VersionReq::parse(r))
+                .collect();
+            let brks: Vec<VersionReq> = brk_ranges
+                .get(modid)
+                .into_iter()
+                .flatten()
+                .filter_map(|r| VersionReq::parse(r))
+                .collect();
+            let ok = |v: &Version| {
+                deps.iter().all(|r| satisfies(v, r))
+                    && !brks.iter().any(|r| satisfies(v, r))
+            };
+            if ok(&cur_v) {
+                continue; // current pin already satisfies — nothing to do
+            }
+            let Some(cands) = pool.get(owner_pid) else {
+                continue;
+            };
+            let pick = cands
+                .iter()
+                .filter(|c| version_compatible(c, mc_version, loader))
+                .filter(|c| {
+                    Version::parse(&c.version_number)
+                        .map(|v| ok(&v))
+                        .unwrap_or(false)
+                })
+                .min_by(|a, b| {
+                    channel_rank(&a.version_type)
+                        .cmp(&channel_rank(&b.version_type))
+                        .then(b.date_published.cmp(&a.date_published))
+                        .then(a.version_id.cmp(&b.version_id))
+                });
+            if let Some(f) = pick {
+                if f.version_id != cur.version_id {
+                    repins.push((
+                        owner_pid.to_string(),
+                        f.version_id.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
     // --- fabric-language-kotlin / Kotlin-major floor ------------------------
     // FLK is the biggest recurring open-range offender and, uniquely, carries
     // a SECOND deterministic signal the date heuristic cannot see: the Kotlin
@@ -433,7 +552,10 @@ pub fn version_floor_repins(
         if let (Some(req_k), Some(cur)) = (req_major, chosen_by.get(flk_pid)) {
             let too_new =
                 kotlin_major(&cur.path).map(|c| c > req_k).unwrap_or(false);
-            if too_new && !already.contains(flk_pid) {
+            if too_new
+                && !already.contains(flk_pid)
+                && !repins.iter().any(|(p, _)| p == flk_pid)
+            {
                 let floor = pool.get(flk_pid).and_then(|cands| {
                     cands
                         .iter()
@@ -1254,6 +1376,7 @@ mod tests {
             client_side: "required".to_string(),
             server_side: "optional".to_string(),
             dependencies: deps,
+            version_number: "1.0.0".to_string(),
             version_type: "release".to_string(),
             date_published: "2024-01-01T00:00:00Z".to_string(),
         }
@@ -1736,6 +1859,7 @@ mod tier2_tests {
             client_side: "required".into(),
             server_side: "optional".into(),
             dependencies: vec![],
+            version_number: vid.into(),
             version_type: "release".into(),
             date_published: date.into(),
         }
@@ -1828,6 +1952,108 @@ mod tier2_tests {
             &std::collections::HashSet::new(),
         );
         assert_eq!(repins, vec![("create".to_string(), "c05".to_string())]);
+    }
+
+    /// Step 4 general re-pin — the real Indium/Immersive-Portals/Sodium
+    /// crash. Indium needs `sodium >=0.5.11 <0.6`; IP `breaks` sodium
+    /// outside 0.5.13; the resolver pinned 0.5.8. The general block must
+    /// re-pin sodium to 0.5.13 — the ONLY version satisfying the whole
+    /// expressed conjunction — with NO FLK/date heuristic involved.
+    #[test]
+    fn general_repin_resolves_expressed_constraint_conjunction() {
+        let chosen = vec![
+            entry("sodium", "0.5.8+mc1.20.1"),
+            entry("indium", "i-1"),
+            entry("immersive_portals", "ip-1"),
+        ];
+        let mut manifests = std::collections::HashMap::new();
+        manifests.insert("sodium".to_string(), man(&["sodium"], &[]));
+        manifests.insert(
+            "indium".to_string(),
+            man(&["indium"], &[("sodium", ">=0.5.11 <0.6")]),
+        );
+        let mut ip = man(&["immersive_portals"], &[]);
+        ip.breaks = vec![(
+            "sodium".to_string(),
+            "<0.5.13 || >0.5.13".to_string(),
+        )];
+        manifests.insert("immersive_portals".to_string(), ip);
+        let mut pool = std::collections::HashMap::new();
+        pool.insert(
+            "sodium".to_string(),
+            vec![
+                rvd("sodium", "0.5.8+mc1.20.1", "2024-02-01T00:00:00Z"),
+                rvd("sodium", "0.5.11+mc1.20.1", "2024-06-01T00:00:00Z"),
+                rvd("sodium", "0.5.13+mc1.20.1", "2024-09-01T00:00:00Z"),
+            ],
+        );
+        let (repins, issues) = version_floor_repins(
+            &chosen,
+            &manifests,
+            &pool,
+            "1.20.1",
+            "fabric",
+            90,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(
+            repins,
+            vec![(
+                "sodium".to_string(),
+                "0.5.13+mc1.20.1".to_string()
+            )],
+            "0.5.13 is the only version in [0.5.11,0.6) AND outside IP's break"
+        );
+        assert!(issues.is_empty(), "solvable ⇒ no hard issue; got {issues:?}");
+    }
+
+    /// Genuinely unsatisfiable expressed constraint ⇒ the general block
+    /// makes NO pick (the hard `VersionConstraintUnsatisfied` then comes
+    /// from `check_version_constraints` on the unfixed closure) — never a
+    /// wrong pick. IP demands ==0.5.13 while Indium demands >=0.5.14.
+    #[test]
+    fn general_repin_makes_no_pick_when_unsatisfiable() {
+        let chosen = vec![
+            entry("sodium", "0.5.8+mc1.20.1"),
+            entry("indium", "i-1"),
+            entry("immersive_portals", "ip-1"),
+        ];
+        let mut manifests = std::collections::HashMap::new();
+        manifests.insert("sodium".to_string(), man(&["sodium"], &[]));
+        manifests.insert(
+            "indium".to_string(),
+            man(&["indium"], &[("sodium", ">=0.5.14")]),
+        );
+        let mut ip = man(&["immersive_portals"], &[]);
+        ip.breaks = vec![(
+            "sodium".to_string(),
+            "<0.5.13 || >0.5.13".to_string(),
+        )];
+        manifests.insert("immersive_portals".to_string(), ip);
+        let mut pool = std::collections::HashMap::new();
+        pool.insert(
+            "sodium".to_string(),
+            vec![
+                rvd("sodium", "0.5.8+mc1.20.1", "2024-02-01T00:00:00Z"),
+                rvd("sodium", "0.5.13+mc1.20.1", "2024-09-01T00:00:00Z"),
+                rvd("sodium", "0.5.20+mc1.20.1", "2025-01-01T00:00:00Z"),
+            ],
+        );
+        let (repins, _) = version_floor_repins(
+            &chosen,
+            &manifests,
+            &pool,
+            "1.20.1",
+            "fabric",
+            90,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        assert!(
+            repins.is_empty(),
+            "no version satisfies >=0.5.14 AND ==0.5.13 — must not wrong-pick, got {repins:?}"
+        );
     }
 
     /// The real IPN/libIPN case: both declare `>=1.9.2+kotlin.1.8.10`
