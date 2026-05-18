@@ -57,10 +57,12 @@ export default function Chat({
   onNavigate,
   openInstance,
   onConsumed,
+  chatsRefresh,
 }: {
   onNavigate: (s: Surface) => void;
   openInstance: ChatRequest | null;
   onConsumed: () => void;
+  chatsRefresh: number;
 }) {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [history, setHistory] = useState<ChatMessage[]>([]);
@@ -176,6 +178,21 @@ export default function Chat({
       clearSilence();
     };
   }, []);
+
+  // An instance was deleted while this surface stayed mounted; its bound
+  // thread file is gone on disk, so re-fetch to drop the stale entry. The
+  // mount effect above already does the initial load (skip bump 0).
+  useEffect(() => {
+    if (chatsRefresh === 0) return;
+    let alive = true;
+    api
+      .listChats()
+      .then((list) => alive && setThreads(list))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [chatsRefresh]);
 
   // Instances asked to open a specific instance's thread: reuse the existing
   // one if there is one, else start a fresh thread pre-bound to that instance.

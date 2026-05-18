@@ -32,6 +32,9 @@ export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   // A request from the Instances surface to open that instance's chat thread.
   const [chatReq, setChatReq] = useState<ChatRequest | null>(null);
+  // Bumped when Instances deletes an instance so the persistently-mounted
+  // Chat surface re-fetches and drops the now-deleted bound thread.
+  const [chatsRefresh, setChatsRefresh] = useState(0);
 
   useEffect(() => {
     api.appInfo().then(setInfo).catch(() => {});
@@ -71,6 +74,7 @@ export default function App() {
             onNavigate={setSurface}
             openInstance={chatReq}
             onConsumed={() => setChatReq(null)}
+            chatsRefresh={chatsRefresh}
           />
         </div>
         {surface === "browse" && <Browse />}
@@ -80,6 +84,7 @@ export default function App() {
               setChatReq({ instanceId, name });
               setSurface("chat");
             }}
+            onInstanceDeleted={() => setChatsRefresh((v) => v + 1)}
           />
         )}
         {surface === "quests" && <Quests />}

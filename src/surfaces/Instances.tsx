@@ -28,11 +28,16 @@ const LOADER_OPTS: Opt[] = [
 
 export default function Instances({
   onOpenChat,
+  onInstanceDeleted,
 }: {
   onOpenChat: (instanceId: string, name: string) => void;
+  onInstanceDeleted: () => void;
 }) {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [account, setAccount] = useState<AuthAccount | null>(null);
+  // Single in-flight marker keyed by project_id. One removal at a time —
+  // the safe-reroute resolver isn't concurrent-safe anyway.
+  const [removingMod, setRemovingMod] = useState<string | null>(null);
 
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -280,6 +285,9 @@ export default function Instances({
       setConfirmDelete(null);
       if (expanded === i.id) setExpanded(null);
       refreshInstances();
+      // The backend deletes the bound thread file; tell the still-mounted
+      // Chat surface to re-fetch so the stale thread disappears.
+      onInstanceDeleted();
     } catch (e) {
       setImportError(String(e));
       setConfirmDelete(null);
@@ -288,6 +296,9 @@ export default function Instances({
 
   async function removeMod(instanceId: string, projectId: string) {
     setImportError(null);
+    // The safe-reroute does a full re-resolve (seconds); without a pending
+    // state the user sees a frozen × and assumes it broke.
+    setRemovingMod(projectId);
     try {
       await api.removeModFromInstance(instanceId, projectId);
       refreshInstances();
@@ -296,6 +307,8 @@ export default function Instances({
       // still depend on this one); never String(e) — that prints
       // "[object Object]" and hides the path forward.
       setImportError(formatEditError(e));
+    } finally {
+      setRemovingMod(null);
     }
   }
 
@@ -565,9 +578,10 @@ export default function Instances({
                         <button
                           className="mod-x"
                           aria-label={`Remove ${m.name}`}
+                          disabled={removingMod === m.project_id}
                           onClick={() => removeMod(i.id, m.project_id)}
                         >
-                          ×
+                          {removingMod === m.project_id ? "…" : "×"}
                         </button>
                       </div>
                     ))
