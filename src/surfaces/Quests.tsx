@@ -22,22 +22,6 @@ const CARD_H = 74;
 // Minimum empty space we want between adjacent cards on each axis.
 const GAP_X = 44;
 const GAP_Y = 30;
-// Fallback unit→px scale when a chapter has too few nodes to derive one.
-const FALLBACK_SCALE = 110;
-
-/** Smallest positive gap between distinct sorted values, or null if <2. The
- *  curator is only told to use "about 2.0" spacing, so the real unit step is
- *  whatever it actually emitted: derive px scale from the data, never assume. */
-function minDelta(values: number[]): number | null {
-  const uniq = [...new Set(values)].sort((a, b) => a - b);
-  if (uniq.length < 2) return null;
-  let min = Infinity;
-  for (let i = 1; i < uniq.length; i++) {
-    const d = uniq[i] - uniq[i - 1];
-    if (d > 0 && d < min) min = d;
-  }
-  return Number.isFinite(min) ? min : null;
-}
 
 interface Placed {
   q: Quest;
@@ -63,41 +47,21 @@ function QuestCanvas({
   const idx = Math.min(chapterIdx, Math.max(0, graph.chapters.length - 1));
   const chapter = graph.chapters[idx];
 
-  // Lay out just this chapter on its own plane (no band offsets).
+  // Lay out just this chapter on its own plane: an implicit topological
+  // ordering. Columns are the quest's DEPTH from the chapter root (longest
+  // dependency path), so the chapter reads strictly left-to-right in the order
+  // it must be played — independent of the model's x/y and of the Heracles
+  // bbox-centroid fold (the two displays are deliberately separate).
   const layout = useMemo(() => {
     const quests = chapter?.quests ?? [];
-    const dx = minDelta(quests.map((q) => q.x));
-    const dy = minDelta(quests.map((q) => q.y));
-    const xScale = dx ? (CARD_W + GAP_X) / dx : FALLBACK_SCALE;
-    const yScale = dy ? (CARD_H + GAP_Y) / dy : FALLBACK_SCALE;
+    const byId = new Map(quests.map((q) => [q.id, q] as const));
+    const ids = new Set(byId.keys());
 
-    // The model doesn't start every chapter at x=0/y=0, so normalise each
-    // chapter to its own origin — otherwise chapters whose coords are offset
-    // render far off-screen and look empty.
-    const minX = quests.length ? Math.min(...quests.map((q) => q.x)) : 0;
-    const minY = quests.length ? Math.min(...quests.map((q) => q.y)) : 0;
-
-    const pos = new Map<string, Placed>();
-    let contentW = 0;
-    let contentH = 0;
-    for (const q of quests) {
-      const x = (q.x - minX) * xScale;
-      const y = (q.y - minY) * yScale;
-      pos.set(q.id, { q, x, y });
-      contentW = Math.max(contentW, x + CARD_W);
-      contentH = Math.max(contentH, y + CARD_H);
-    }
-
-    // Primary root of this chapter — the quest the Heracles bbox-centroid
-    // camera (and our reset view) should open on. Mirrors layout_chapter()
-    // in quest.rs exactly: intra-chapter in-degree 0, then largest forward
-    // closure, then lexicographically smallest id. Deriving it the same way
-    // keeps the in-app viewer pointed at the same quest the game opens on,
-    // for every chapter of every instance — no special-casing.
-    const ids = new Set(quests.map((q) => q.id));
+    // Intra-chapter dependency DAG (cross-chapter deps are ignored here so
+    // "depth from THIS chapter's root" is well-defined).
     const succ = new Map<string, string[]>();
     const indeg = new Map<string, number>();
-    for (const q of quests) indeg.set(q.id, 0);
+    for (const id of ids) indeg.set(id, 0);
     for (const q of quests)
       for (const d of q.deps)
         if (ids.has(d)) {
@@ -105,6 +69,10 @@ function QuestCanvas({
           succ.get(d)!.push(q.id);
           indeg.set(q.id, (indeg.get(q.id) ?? 0) + 1);
         }
+
+    // Primary root — the quest our reset view (and Heracles) opens on.
+    // Mirrors layout_chapter() in quest.rs: intra-chapter in-degree 0, then
+    // largest forward closure, then lexicographically smallest id.
     let roots = [...ids].filter((id) => (indeg.get(id) ?? 0) === 0).sort();
     if (roots.length === 0) roots = [...ids].sort().slice(0, 1); // cyclic
     const closure = (start: string): number => {
@@ -130,6 +98,46 @@ function QuestCanvas({
         best = c;
         rootId = r;
       }
+    }
+
+    // Longest-path depth from the roots via a Kahn topological pass. Every
+    // in-degree-0 quest is depth 0; depth(q) = 1 + max(depth(parent)). Nodes
+    // trapped in a cycle are never popped and keep depth 0, so the layout is
+    // total/infallible (degrades the same way rootId does).
+    const depth = new Map<string, number>();
+    for (const id of ids) depth.set(id, 0);
+    const indeg2 = new Map(indeg);
+    const queue = [...roots];
+    while (queue.length) {
+      const u = queue.shift()!;
+      for (const c of succ.get(u) ?? []) {
+        if ((depth.get(u) ?? 0) + 1 > (depth.get(c) ?? 0))
+          depth.set(c, (depth.get(u) ?? 0) + 1);
+        const left = (indeg2.get(c) ?? 0) - 1;
+        indeg2.set(c, left);
+        if (left === 0) queue.push(c);
+      }
+    }
+
+    // Bucket by depth → columns; within a column order by id (deterministic).
+    const cols = new Map<number, string[]>();
+    for (const id of [...ids].sort()) {
+      const d = depth.get(id) ?? 0;
+      if (!cols.has(d)) cols.set(d, []);
+      cols.get(d)!.push(id);
+    }
+
+    const pos = new Map<string, Placed>();
+    let contentW = 0;
+    let contentH = 0;
+    for (const [d, colIds] of cols) {
+      const x = d * (CARD_W + GAP_X);
+      colIds.forEach((id, row) => {
+        const y = row * (CARD_H + GAP_Y);
+        pos.set(id, { q: byId.get(id)!, x, y });
+        contentW = Math.max(contentW, x + CARD_W);
+        contentH = Math.max(contentH, y + CARD_H);
+      });
     }
 
     return {

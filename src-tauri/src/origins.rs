@@ -37,8 +37,11 @@
 //!   `origins:<x>` power id in the origin's `powers` (Origins' own code
 //!   implements them); never define your own. See `SHIPPED_ORIGINS_POWERS`.
 //! - `impact` is an INTEGER 0..=3 (NOT the string enum the old code emitted).
-//! - The layer file appends to the stock chooser with
-//!   `{"replace": false, "origins": [...]}`.
+//! - The layer file REPLACES the stock chooser with
+//!   `{"replace": true, "origins": [...]}` so ONLY the pack's generated
+//!   origins are selectable (the 10 vanilla Origins are intentionally
+//!   wiped — user-requested). `replace:true` is bytecode-verified in
+//!   docs/modding/origins_apoli_2.9.2_schema.md §B.
 
 use std::path::Path;
 
@@ -677,8 +680,9 @@ fn to_file(v: &serde_json::Value) -> String {
 }
 
 /// Emit the datapack from a PRE-VALIDATED set. `name`/`description` are plain
-/// strings; `impact` a number; the layer appends with `replace:false`; only
-/// `Local` powers get a file (a `Shipped` ref is just listed in the origin).
+/// strings; `impact` a number; the layer REPLACES the stock chooser with
+/// `replace:true` (only the pack's origins show); only `Local` powers get a
+/// file (a `Shipped` ref is just listed in the origin).
 fn emit(v: &Validated, ns: &str) -> Vec<(String, String)> {
     use std::collections::BTreeSet;
     let set = &v.0;
@@ -736,12 +740,20 @@ fn emit(v: &Validated, ns: &str) -> Vec<(String, String)> {
         ));
     }
 
-    // Layer: append to the stock chooser (replace:false).
+    // Layer: REPLACE the stock chooser (replace:true) so ONLY the pack's
+    // generated origins are selectable — the 10 vanilla Origins
+    // (Human/Enderian/Avian/…) are intentionally wiped. `replace:true`
+    // semantics are bytecode-verified in docs/modding/origins_apoli_2.9.2
+    // _schema.md (§B line 69/330): this file's `origins` replace all others
+    // for the same layer id. The validator guarantees a non-empty set
+    // (`IntegrityError::EmptySet`), so the replaced layer always has ≥1
+    // origin (a replace:true layer with an empty array would soft-lock the
+    // origin screen).
     let layer_origins: Vec<String> =
         origins.iter().map(|o| format!("{ns}:{}", o.id)).collect();
     out.push((
         format!("{ROOT}/{LAYER_PATH_SUFFIX}"),
-        to_file(&json!({ "replace": false, "origins": layer_origins })),
+        to_file(&json!({ "replace": true, "origins": layer_origins })),
     ));
 
     out
@@ -1174,11 +1186,20 @@ mod tests {
     }
 
     #[test]
-    fn no_emitted_power_uses_an_invalid_type_and_layer_has_replace_false() {
+    fn no_emitted_power_uses_an_invalid_type_and_layer_replaces_stock() {
         let files = index(&build_origins_datapack(NS));
         let layer = parse(&files, &format!("{ROOT}/{LAYER_PATH_SUFFIX}"));
-        assert_eq!(layer["replace"], json!(false), "layer must be replace:false");
-        assert!(layer["origins"].as_array().is_some_and(|a| !a.is_empty()));
+        assert_eq!(
+            layer["replace"],
+            json!(true),
+            "layer must be replace:true so ONLY the pack's origins show \
+             (the 10 vanilla Origins are intentionally wiped)"
+        );
+        assert!(
+            layer["origins"].as_array().is_some_and(|a| !a.is_empty()),
+            "a replace:true layer MUST be non-empty or the origin screen \
+             soft-locks (guaranteed by IntegrityError::EmptySet)"
+        );
         for (path, _) in &files {
             if path.contains("/powers/") && path.ends_with(".json") {
                 let v = parse(&files, path);

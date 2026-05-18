@@ -2249,14 +2249,19 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                 }
             }
 
-            // VERIFIED against Heracles 1.20.x QuestSettings source: the
-            // `hidden` field is a QuestDisplayStatus that DEFAULTS to LOCKED,
-            // which hides every quest until its dependencies are met — so a
-            // fresh world shows only each chapter's single root quest (the
-            // reported "one quest per chapter"). `dependencies_visible` (the
-            // serialized name is the full "quest.heracles.<lower>" string)
-            // reveals the whole chapter tree with locked quests greyed —
-            // the All-the-Mods-style web the design intends.
+            // VERIFIED against the actual Heracles-fabric-1.20.1-1.1.13 jar
+            // bytecode (`QuestsWidget.shouldHide(Object2BooleanMap,
+            // QuestEntry, QuestDisplayStatus)`): at offset 89 `if_acmpne 181`,
+            // a `LOCKED` status falls through every branch to offset 181
+            // `iconst_0; ireturn` — `shouldHide` returns false unconditionally,
+            // so the quest is NEVER hidden and the WHOLE chapter tree is always
+            // visible (locked quests greyed, dep arrows drawn). It is also the
+            // codec default (`EnumCodec.of(...).fieldOf("hidden").orElse(
+            // LOCKED)`). The recursive `DEPENDENCIES_VISIBLE` branch is the one
+            // that progressively HIDES quests — emitting it (the prior, wrong
+            // belief that LOCKED hides) is exactly what collapsed each chapter
+            // to its single visible quest. So we emit `locked`, the
+            // All-the-Mods-style full web the design intends.
             // Quest icon: a recipe node shows its primary result item; a
             // content/boss node shows the token it drops. Both are the
             // tangible thing the quest is *for*, so the questbook entry is no
@@ -2284,7 +2289,7 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                 "tasks": Value::Object(tasks),
                 "rewards": Value::Object(rewards),
                 "settings": {
-                    "hidden": "quest.heracles.dependencies_visible"
+                    "hidden": "quest.heracles.locked"
                 },
                 "display": Value::Object(display),
             });
@@ -2935,12 +2940,14 @@ mod tests {
         // Multi-line description becomes a string list.
         assert_eq!(v["display"]["description"][0], "line1");
         assert_eq!(v["display"]["description"][1], "line2");
-        // Source-verified: Heracles QuestSettings.hidden defaults to LOCKED
-        // (only roots show until deps met). We emit dependencies_visible so
-        // the whole chapter tree is visible (locked quests greyed). The
-        // serialized enum value is the full "quest.heracles.<lower>" string.
+        // Bytecode-verified against Heracles-fabric-1.20.1-1.1.13:
+        // `QuestsWidget.shouldHide` returns false unconditionally for a LOCKED
+        // status (offset 89 `if_acmpne 181` -> 181 `iconst_0; ireturn`), so
+        // `locked` makes the whole chapter tree always visible (locked greyed).
+        // `dependencies_visible` takes the recursive HIDE branch and collapses
+        // a chapter to one quest — the exact bug this asserts against.
         assert_eq!(
-            v["settings"]["hidden"], "quest.heracles.dependencies_visible",
+            v["settings"]["hidden"], "quest.heracles.locked",
             "every quest must reveal the full tree, not hide until unlocked"
         );
         // Tasks are an id-keyed map carrying the heracles:* type tags.
@@ -4806,6 +4813,95 @@ mod tests {
              problem reading ... anvil:*` lines.",
             dir.display(),
             log.display()
+        );
+    }
+
+    /// SURGICAL, EXPLICIT-ONLY one-shot: retrofit the already-on-disk live
+    /// instance `UCL: The Bentham Ultimatum` so its stale Heracles quest JSON
+    /// (emitted by an earlier build with the wrong `dependencies_visible`
+    /// visibility, which collapsed every chapter to one quest) is re-emitted
+    /// with the bytecode-verified `quest.heracles.locked` (full tree visible).
+    /// A code fix alone does NOT touch files already written by an earlier
+    /// build. `#[ignore]` so it never runs in CI; a hard id guard + on-disk
+    /// timestamped backup so it can only ever rewrite that one instance and
+    /// the prior config is recoverable.
+    ///
+    /// SURGICAL ONE-SHOT — DO NOT generalize, parameterize the id, or remove
+    /// the path guard / backup. It mutates a real on-disk user instance.
+    /// Delete this whole test rather than "make it reusable".
+    ///
+    ///   cargo test --lib quest::tests::reemit_locked_for_live_instance \
+    ///       -- --ignored --exact --nocapture
+    #[test]
+    #[ignore]
+    fn reemit_locked_for_live_instance() {
+        const ID: &str = "18b0b104ec8d6d5831d8";
+        let home = std::env::var("HOME").expect("HOME set");
+        let dir = std::path::PathBuf::from(&home)
+            .join(".anvil/instances")
+            .join(ID);
+        assert!(
+            dir.join("anvil-quests.json").exists(),
+            "guard: {} must be the existing live instance",
+            dir.display()
+        );
+
+        // Timestamped backup of the prior Heracles config + source-of-truth
+        // graph BEFORE any mutation (recoverable; never clobber user data).
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let her = dir.join("config/heracles");
+        if her.exists() {
+            let bak = dir.join(format!("config/heracles.pre-locked.{ts}.bak"));
+            let out = std::process::Command::new("cp")
+                .arg("-R")
+                .arg(&her)
+                .arg(&bak)
+                .status()
+                .expect("cp -R heracles backup");
+            assert!(out.success(), "heracles backup failed");
+            eprintln!("BACKUP: {}", bak.display());
+        }
+        let q = dir.join("anvil-quests.json");
+        std::fs::copy(&q, dir.join(format!("anvil-quests.json.pre-locked.{ts}.bak")))
+            .expect("backup anvil-quests.json");
+
+        // EXACT production emit through the same path the app uses (lays out a
+        // centered clone, writes Heracles JSON + datapacks + serialized graph).
+        let g = load_graph(&dir).expect("load_graph of the live instance");
+        write_quests(&g, &dir).expect("write_quests");
+
+        // ON-DISK VERIFICATION: every emitted quest now has the LOCKED
+        // visibility and ZERO files carry the old collapsing value.
+        let qdir = dir.join("config/heracles/quests");
+        let mut n = 0usize;
+        for e in std::fs::read_dir(&qdir).expect("heracles quests dir") {
+            let p = e.unwrap().path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let txt = std::fs::read_to_string(&p).unwrap();
+            assert!(
+                !txt.contains("dependencies_visible"),
+                "{} still carries dependencies_visible",
+                p.display()
+            );
+            let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+            assert_eq!(
+                v["settings"]["hidden"], "quest.heracles.locked",
+                "{} must emit the LOCKED (always-visible) status",
+                p.display()
+            );
+            n += 1;
+        }
+        assert!(n > 0, "no Heracles quest files emitted");
+        eprintln!(
+            "\nAFTER: re-emitted {ID} — {n} quest files now \
+             `hidden: quest.heracles.locked` (full chapter tree visible).\n\
+             NEXT (real proof): relaunch, open Heracles — every chapter shows \
+             its whole web (locked greyed), centered on the start quest.\n",
         );
     }
 }
