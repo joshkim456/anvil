@@ -229,6 +229,15 @@ export type CuratorEvent =
   | { kind: "tool"; data: { name: string; status: string } }
   | { kind: "assembled"; data: { instance_id: string; name: string } }
   | { kind: "phase"; data: string }
+  | {
+      kind: "usage";
+      data: {
+        input_tokens: number;
+        cache_creation_input_tokens: number;
+        cache_read_input_tokens: number;
+        output_tokens: number;
+      };
+    }
   | { kind: "done" }
   | { kind: "error"; data: string };
 

@@ -54,8 +54,22 @@ pub enum CuratorEvent {
     /// it. The "progression" phase exposes generate_quests (recipes are a
     /// quest-node facet of it — no separate recipe tool) + query_registry.
     Phase(String),
+    /// Per-round token usage pulled from the Anthropic stream (observability;
+    /// lets us see cache hit/miss and cost without changing the request).
+    Usage(Usage),
     Done,
     Error(String),
+}
+
+/// Token counts for one Anthropic streamed response. `message_start` carries
+/// `input_tokens` + the two cache counts; `message_delta` carries the
+/// cumulative `output_tokens` (last write wins).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub output_tokens: u64,
 }
 
 const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -337,17 +351,24 @@ pub async fn run_turn(
     tx: UnboundedSender<CuratorEvent>,
 ) -> anyhow::Result<Vec<ChatMsg>> {
     let system_prompt = system_prompt_for(phase);
-    // Static prompt+tools stay one cached block; the per-thread ground-truth
-    // preamble is a second, un-cached block (small, varies per thread) so the
-    // big prefix still cache-hits every round.
+    // Static prompt+tools are one cached block; the per-thread ground-truth
+    // preamble is a second cached block. Both use a 1h TTL so a human-paced
+    // chat (minutes between turns) cache-hits across turns, not just within a
+    // single round loop. The preamble is byte-stable while the pack is stable.
     let system_blocks: Vec<Value> = {
         let mut v = vec![json!({
             "type": "text",
             "text": system_prompt,
-            "cache_control": { "type": "ephemeral" }
+            "cache_control": { "type": "ephemeral", "ttl": "1h" }
         })];
         if let Some(pre) = active_pack_preamble(thread_id) {
-            v.push(json!({ "type": "text", "text": pre }));
+            // The preamble is byte-stable while the pack is stable, so give it
+            // its own 1h-durable breakpoint instead of leaving it uncached.
+            v.push(json!({
+                "type": "text",
+                "text": pre,
+                "cache_control": { "type": "ephemeral", "ttl": "1h" }
+            }));
         }
         v
     };
@@ -372,16 +393,19 @@ pub async fn run_turn(
 
     let tools = tool_specs_for(phase);
     let mut final_text = String::new();
+    let mut turn_usage = Usage::default();
 
     for round in 0..MAX_TOOL_ROUNDS {
-        // Prompt caching. Render order is tools -> system -> messages, so a
-        // cache_control breakpoint on the system block caches the WHOLE static
-        // prefix (tools + system) together. The top-level cache_control
-        // auto-places a second breakpoint on the last message block, so the
-        // growing conversation prefix is also read from cache each tool round
-        // instead of re-billed. Caching is GA on anthropic-version
-        // 2023-06-01 (no beta header). Sonnet 4.6 min cacheable prefix is
-        // 2048 tokens; our system + tools schema is far larger, so it engages.
+        // Prompt caching. Render order is tools -> system -> messages, so the
+        // cache_control breakpoints on the two system blocks cache the WHOLE
+        // static prefix (tools + system + stable preamble) together. The
+        // top-level cache_control auto-places a further breakpoint on the last
+        // message block, so the growing conversation prefix is also read from
+        // cache each tool round instead of re-billed. The 1h TTL (set above,
+        // gated by the extended-cache-ttl beta header) survives the minutes
+        // between human turns, so turn 2+ reads the prefix instead of
+        // rewriting it. Sonnet 4.6 min cacheable prefix is 2048 tokens; our
+        // system + tools schema is far larger, so it engages.
         let body = json!({
             "model": model,
             "max_tokens": MAX_TOKENS,
@@ -389,13 +413,16 @@ pub async fn run_turn(
             "messages": messages,
             "tools": tools,
             "stream": true,
-            "cache_control": { "type": "ephemeral" },
+            "cache_control": { "type": "ephemeral", "ttl": "1h" },
         });
 
         let resp = http
             .post(ANTHROPIC_URL)
             .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
+            // Required for the `"ttl": "1h"` cache_control above; without it
+            // the 1h TTL is rejected/ignored and writes fall back to 5m.
+            .header("anthropic-beta", "extended-cache-ttl-2025-04-11")
             .header("content-type", "application/json")
             .json(&body)
             .send()
@@ -414,9 +441,23 @@ pub async fn run_turn(
             ));
         }
 
-        let (blocks, stop_reason) = parse_sse_stream(resp, &tx)
+        let (blocks, stop_reason, round_usage) = parse_sse_stream(resp, &tx)
             .await
             .context("reading Anthropic SSE stream")?;
+
+        turn_usage.input_tokens += round_usage.input_tokens;
+        turn_usage.cache_creation_input_tokens += round_usage.cache_creation_input_tokens;
+        turn_usage.cache_read_input_tokens += round_usage.cache_read_input_tokens;
+        turn_usage.output_tokens += round_usage.output_tokens;
+        tracing::info!(
+            round,
+            input = round_usage.input_tokens,
+            cache_creation = round_usage.cache_creation_input_tokens,
+            cache_read = round_usage.cache_read_input_tokens,
+            output = round_usage.output_tokens,
+            "curator round usage"
+        );
+        let _ = tx.send(CuratorEvent::Usage(round_usage));
 
         // Accumulate the assistant text from this round for the final reply.
         let mut round_had_text = false;
@@ -499,6 +540,13 @@ pub async fn run_turn(
         }
     }
 
+    tracing::info!(
+        input = turn_usage.input_tokens,
+        cache_creation = turn_usage.cache_creation_input_tokens,
+        cache_read = turn_usage.cache_read_input_tokens,
+        output = turn_usage.output_tokens,
+        "curator turn usage total"
+    );
     let _ = tx.send(CuratorEvent::Done);
 
     let mut updated = history;
@@ -562,7 +610,7 @@ enum BlockBuilder {
 async fn parse_sse_stream(
     resp: reqwest::Response,
     tx: &UnboundedSender<CuratorEvent>,
-) -> anyhow::Result<(Vec<ContentBlock>, Option<String>)> {
+) -> anyhow::Result<(Vec<ContentBlock>, Option<String>, Usage)> {
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
 
@@ -571,6 +619,7 @@ async fn parse_sse_stream(
         std::collections::BTreeMap::new();
     let mut order: Vec<u64> = Vec::new();
     let mut stop_reason: Option<String> = None;
+    let mut usage = Usage::default();
     // The event name from the most recent `event:` line.
     let mut cur_event: Option<String> = None;
 
@@ -625,6 +674,7 @@ async fn parse_sse_stream(
                 &mut builders,
                 &mut order,
                 &mut stop_reason,
+                &mut usage,
                 tx,
             );
         }
@@ -640,7 +690,7 @@ async fn parse_sse_stream(
         }
     }
 
-    Ok((blocks, stop_reason))
+    Ok((blocks, stop_reason, usage))
 }
 
 /// Apply one decoded SSE event to the in-progress block state.
@@ -650,6 +700,7 @@ fn handle_sse_event(
     builders: &mut std::collections::BTreeMap<u64, BlockBuilder>,
     order: &mut Vec<u64>,
     stop_reason: &mut Option<String>,
+    usage: &mut Usage,
     tx: &UnboundedSender<CuratorEvent>,
 ) {
     // Prefer the JSON "type"; fall back to the SSE event name.
@@ -752,8 +803,26 @@ fn handle_sse_event(
             {
                 *stop_reason = Some(sr.to_string());
             }
+            // Cumulative output token count; last write wins.
+            if let Some(o) = val
+                .get("usage")
+                .and_then(|u| u.get("output_tokens"))
+                .and_then(Value::as_u64)
+            {
+                usage.output_tokens = o;
+            }
         }
-        "message_stop" | "message_start" | "ping" => {}
+        "message_start" => {
+            // Carries input + the two cache counts (output_tokens here is
+            // just the priming 1; the real total arrives via message_delta).
+            if let Some(u) = val.get("message").and_then(|m| m.get("usage")) {
+                let get = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+                usage.input_tokens = get("input_tokens");
+                usage.cache_creation_input_tokens = get("cache_creation_input_tokens");
+                usage.cache_read_input_tokens = get("cache_read_input_tokens");
+            }
+        }
+        "message_stop" | "ping" => {}
         "error" => {
             let msg = val
                 .get("error")
@@ -3463,10 +3532,22 @@ async fn tool_query_registry(
     } else {
         String::new()
     };
+    // Compact line table instead of a JSON array of repeated-key objects:
+    // ~40-50% fewer tokens, information-identical, trivially parseable, same
+    // order. The leading summary + pagination hint are unchanged so the
+    // offset contract still holds.
+    let table = matched
+        .iter()
+        .map(|m| {
+            let s = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
+            format!("{} | {} | {}", s("id"), s("label"), s("source_mod"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     Ok(format!(
-        "query_registry {kind}: {} of {total} match(es){scanned_note}.{more}\n{}",
+        "query_registry {kind}: {} of {total} match(es){scanned_note}.{more}\n\
+         id | label | source_mod\n{table}",
         matched.len(),
-        serde_json::to_string(&matched)?
     ))
 }
 

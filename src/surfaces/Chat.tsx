@@ -242,6 +242,11 @@ export default function Chat({
           setPhase(e.data as Phase);
           persist(historyRef.current, { phase: e.data as Phase });
           break;
+        case "usage":
+          // Observability only: per-round token + cache counts. Logged, not
+          // rendered, so cache hit/miss is inspectable without UI noise.
+          console.debug("curator usage", e.data);
+          break;
         case "done":
           clearSilence();
           setActivity(null);
