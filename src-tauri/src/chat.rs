@@ -139,6 +139,31 @@ pub fn proposed(thread_id: &str) -> bool {
     proposed_path(thread_id).exists()
 }
 
+fn origins_authored_path(id: &str) -> PathBuf {
+    chats_dir().join(format!("{id}.origins_authored"))
+}
+
+/// Mark that the model successfully authored + validated a custom origin set
+/// in this thread (via generate_origins). The curator then SKIPS the
+/// deterministic rescue origins emit so the authored set is not clobbered.
+///
+/// INTENTIONALLY STICKY (set on first success, never cleared): a later
+/// generate_origins call that FAILS validation writes nothing, so the last
+/// good authored set stays on disk — exactly what we want. Do not "fix" this
+/// to clear on failure; that would let the rescue set clobber a valid pack.
+pub fn mark_origins_authored(thread_id: &str) {
+    let dir = chats_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let _ = std::fs::write(origins_authored_path(thread_id), b"1");
+}
+
+/// Whether the model authored a valid origin set in this thread.
+pub fn origins_authored(thread_id: &str) -> bool {
+    origins_authored_path(thread_id).exists()
+}
+
 /// All threads, newest activity first.
 pub fn load_threads() -> Vec<ChatThread> {
     let dir = chats_dir();

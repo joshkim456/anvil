@@ -125,6 +125,8 @@ const PROGRESSION_SYSTEM_PROMPT: &str = r#"You are Anvil, designing the PROGRESS
 
 GROUNDING. Before you reference ANY concrete id (item, entity, advancement, structure, biome, tag, recipe) in a quest or recipe, call query_registry to confirm it actually exists in THIS pack's real registry, scanned from the resolved mod jars. Do not recall ids from memory and do not invent them: a fabricated id (for example a mod boss entity that mod does not actually register) is rejected by generate_quests. Query the registry first for each mod you build an arc around, then design only against the ids it returns. If query_registry reports a mod's jar is not on disk yet, its ids cannot be verified now and will be accepted only low-confidence (and flagged) — prefer ids the tool confirms.
 
+ORIGINS. If the assembled pack runs Origins, a CUSTOM ORIGINS block appears later in this system prompt (it is present ONLY when the pack has Origins). When it is present, call generate_origins ONCE, after your first generate_quests batch, with a small bespoke set of 2 to 5 origins themed to THIS pack and the player's request — a tech pack gets an Engineer, a magic pack an Arcanist, a combat pack a Berserker; never generic filler. Follow that block's rules and SAFE power list exactly; if generate_origins returns issues, fix exactly those and call it again with the full corrected set. If that block is absent, the pack has no Origins — do not call generate_origins.
+
 QUESTS. The quest system is Heracles (on Modrinth as "Odyssey Quests"); the pack is 1.20.1 fabric/forge with odyssey-quests + resourceful-lib already in it. Design quests to the standard of a real kitchen-sink pack (All the Mods, Create: Above and Beyond): a deep, interconnected progression web, not a flat list.
 
 - Chapters are progression tiers/themes: a small "Getting Started" hub, then one themed questline per MAJOR mod actually in the pack, then a milestone/endgame chapter whose quests converge several mod chapters. Kitchen-sink ~6 to 10 chapters / 40 to 80 quests; smaller for focused packs but still tiered.
@@ -178,10 +180,10 @@ fn tool_specs_for(phase: &str) -> Value {
         // (the Slice-1 grounded id/label search so design is push-grounded,
         // not post-linted).
         "progression" => {
-            &["generate_quests", "query_registry", "get_mod"]
+            &["generate_quests", "generate_origins", "query_registry", "get_mod"]
         }
         "complete" => {
-            &["generate_quests", "query_registry", "get_mod"]
+            &["generate_quests", "generate_origins", "query_registry", "get_mod"]
         }
         "assembled" => &[
             "propose_pack",
@@ -191,6 +193,7 @@ fn tool_specs_for(phase: &str) -> Value {
             "assemble_pack",
             "verify_pack",
             "generate_quests",
+            "generate_origins",
             "query_registry",
         ],
         // curating (default): full pack-building set, no progression tools yet.
@@ -367,6 +370,17 @@ pub async fn run_turn(
             v.push(json!({
                 "type": "text",
                 "text": pre,
+                "cache_control": { "type": "ephemeral", "ttl": "1h" }
+            }));
+        }
+        // The custom-origins catalog is GENERATED from the same Rust
+        // constants the validator gates on (so prompt and gate cannot drift)
+        // and is only relevant while authoring progression. Static text →
+        // its own durable cache block.
+        if matches!(phase, "progression" | "complete") {
+            v.push(json!({
+                "type": "text",
+                "text": crate::origins::safe_catalog_prompt_section(),
                 "cache_control": { "type": "ephemeral", "ttl": "1h" }
             }));
         }
@@ -1130,6 +1144,60 @@ fn tool_specs() -> Value {
             }
         },
         {
+            "name": "generate_origins",
+            "description": "Author the pack's CUSTOM ORIGINS (Origins/Apoli datapack) — only if the assembled instance runs Origins core + Open Loader. Design 2-5 origins themed to THIS pack and the player's request (a tech pack gets an Engineer, a magic pack an Arcanist, etc.). This is a SINGLE authored set: calling again REPLACES the whole set (it does NOT accumulate like generate_quests). The proposal is hard-validated against the in-code Apoli catalog before anything is written; on failure NOTHING is written and a structured list of {kind, where, why, hint} is returned — fix exactly those and call again. Follow the CUSTOM ORIGINS rules and the SAFE power-type list in the system prompt verbatim: name/description are plain strings, impact is an integer 0-3, powers are either ids you define here or shipped origins:<id> references (never redefine a shipped power).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "instance_id": { "type": "string", "description": "The assembled instance id from assemble_pack." },
+                    "origins": {
+                        "type": "object",
+                        "description": "The full authored origin set.",
+                        "properties": {
+                            "origins": {
+                                "type": "array",
+                                "description": "2-5 origins.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "description": "lowercase [a-z0-9_.-]+ (becomes the file name)." },
+                                        "name": { "type": "string", "description": "PLAIN string display name (never an object)." },
+                                        "description": { "type": "string", "description": "PLAIN string." },
+                                        "powers": {
+                                            "type": "array",
+                                            "items": { "type": "string" },
+                                            "description": "Each entry is EITHER a power id you define in `powers` below, OR a shipped `origins:<id>` reference."
+                                        },
+                                        "icon": { "type": "string", "description": "Real vanilla item id, namespace:path, e.g. minecraft:netherite_chestplate." },
+                                        "impact": { "type": "integer", "enum": [0, 1, 2, 3], "description": "0 none, 1 low, 2 medium, 3 high." },
+                                        "order": { "type": "integer", "description": "Display order; distinct per origin." }
+                                    },
+                                    "required": ["id", "name", "description", "powers", "icon", "impact", "order"]
+                                }
+                            },
+                            "powers": {
+                                "type": "array",
+                                "description": "Every power your origins define locally (shipped origins:<id> refs do NOT go here).",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "description": "lowercase [a-z0-9_.-]+." },
+                                        "name": { "type": "string", "description": "PLAIN string." },
+                                        "description": { "type": "string", "description": "PLAIN string." },
+                                        "type": { "type": "string", "description": "A SAFE power-type id from the system-prompt list (apoli:<id>)." },
+                                        "body": { "type": "object", "description": "Type-specific fields per the SAFE list (e.g. apoli:attribute -> {\"modifier\":{...}}; apoli:modify_falling -> {\"velocity\":n,\"take_fall_damage\":false}). Omit/empty for self-contained types." }
+                                    },
+                                    "required": ["id", "name", "description", "type"]
+                                }
+                            }
+                        },
+                        "required": ["origins", "powers"]
+                    }
+                },
+                "required": ["instance_id", "origins"]
+            }
+        },
+        {
             "name": "query_registry",
             "description": "Search the assembled pack's REAL registry (scanned offline from the resolved mod jars) for concrete ids to design against. Use this BEFORE referencing any item/entity/advancement/structure/biome/tag/recipe id in a quest or recipe, instead of recalling ids from memory: a fabricated id (e.g. an entity a mod does not actually have) is rejected by generate_quests, so query first and design only against ids this returns. Returns up to 50 matches as {id, label, source_mod}; pass an offset to page. If a mod's jar is not on disk yet its ids will not appear here (they are accepted low-confidence at generation time and flagged) — prefer ids this tool confirms.",
             "input_schema": {
@@ -1213,7 +1281,8 @@ async fn execute_tool(
         "validate_pack" => tool_validate_pack(mr, input, tx).await,
         "assemble_pack" => tool_assemble_pack(mr, thread_id, input, tx).await,
         "seed_from_pack" => tool_seed_from_pack(mr, input, tx).await,
-        "generate_quests" => tool_generate_quests(input, tx).await,
+        "generate_quests" => tool_generate_quests(thread_id, input, tx).await,
+        "generate_origins" => tool_generate_origins(thread_id, input, tx).await,
         "query_registry" => tool_query_registry(input, tx).await,
         "verify_pack" => tool_verify_pack(input, tx).await,
         other => Err(anyhow!("unknown tool: {other}")),
@@ -2926,7 +2995,108 @@ async fn tool_seed_from_pack(
     Ok(result)
 }
 
+/// Model-authored custom origins. Mirrors `tool_generate_quests`'s
+/// propose -> validate -> (recoverable issues) -> retry shape; the
+/// `run_turn` round loop (bounded by MAX_TOOL_ROUNDS) IS the repair loop, so
+/// a failed proposal returns structured `{kind,where,why,hint}` issues rather
+/// than erroring. A single authored set per pack (REPLACES on re-call).
+async fn tool_generate_origins(
+    thread_id: Option<&str>,
+    input: &Value,
+    tx: &UnboundedSender<CuratorEvent>,
+) -> anyhow::Result<String> {
+    let instance_id = str_field(input, "instance_id")?.to_string();
+    let origins_val = input
+        .get("origins")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing required object field 'origins'"))?;
+
+    let _ = tx.send(CuratorEvent::Phase("progression".to_string()));
+    tool_chip(tx, "generate_origins", "validating");
+
+    let set: crate::origins::OriginsSet = match serde_json::from_value(origins_val) {
+        Ok(s) => s,
+        Err(e) => {
+            return Ok(format!(
+                "generate_origins: the `origins` JSON did not match the expected shape: {e}. \
+                 Each origin needs id/name/description/powers/icon/impact(int 0-3)/order; \
+                 each power needs id/name/description/type(+optional body). Fix and call again."
+            ));
+        }
+    };
+
+    let Some(inst) = load_instances().into_iter().find(|i| i.id == instance_id) else {
+        return Ok(format!(
+            "generate_origins: no instance found with id {instance_id}. Assemble the pack first."
+        ));
+    };
+
+    // Gate: Origins core + Open Loader (the datapack lives under
+    // config/openloader/data and its powers are Apoli powers core registers).
+    let has_core = inst
+        .mods
+        .iter()
+        .any(|m| crate::origins::is_origins_core(&m.project_id, &m.name));
+    let has_open_loader = inst.mods.iter().any(|m| {
+        let needle = |s: &str| {
+            let s = s.to_lowercase();
+            s.contains("open-loader") || s.contains("openloader")
+        };
+        needle(&m.project_id) || needle(&m.name) || needle(&m.path)
+    });
+    if !has_core {
+        return Ok(format!(
+            "generate_origins: instance {instance_id} does not pin Origins core, so a custom \
+             origins datapack would do nothing. Do not call generate_origins for this pack."
+        ));
+    }
+    if !has_open_loader {
+        return Ok(format!(
+            "generate_origins: instance {instance_id} has Origins but not Open Loader, so the \
+             origins datapack (config/openloader/data/...) would never load. Recover: search_mods \
+             for \"open-loader\", add it (1.20.1 fabric), validate_pack then assemble_pack again \
+             with the SAME pack name, then call generate_origins again."
+        ));
+    }
+
+    // THE GATE. On failure nothing is written; return the structured repair
+    // payload so the next round converges (run_turn bounds the retries).
+    let validated = match crate::origins::validate(set) {
+        Ok(v) => v,
+        Err(errs) => {
+            tool_chip(tx, "generate_origins", "blocked: invalid");
+            return Ok(format!(
+                "generate_origins refused to write: {} issue(s). Fix EXACTLY these and call \
+                 generate_origins again with the corrected full set:\n{}",
+                errs.len(),
+                serde_json::to_string(&crate::origins::errors_to_json(&errs))?
+            ));
+        }
+    };
+
+    crate::origins::write_validated_origins(
+        &instance_dir(&instance_id),
+        "anvil",
+        &validated,
+    )
+    .with_context(|| format!("writing authored origins for instance {instance_id}"))?;
+    if let Some(tid) = thread_id {
+        crate::chat::mark_origins_authored(tid);
+    }
+
+    let s = validated.get();
+    tool_chip(tx, "generate_origins", "done");
+    Ok(format!(
+        "generate_origins: wrote {} custom origin(s) and {} power file(s) to instance \
+         {instance_id}. The Origins datapack is valid and fully replaces any prior set. \
+         Do not call generate_origins again unless revising the whole set.",
+        s.origins.len(),
+        s.powers.len()
+    ))
+}
+
 async fn tool_generate_quests(
+    thread_id: Option<&str>,
     input: &Value,
     tx: &UnboundedSender<CuratorEvent>,
 ) -> anyhow::Result<String> {
@@ -3085,13 +3255,13 @@ async fn tool_generate_quests(
     write_quests(&graph, &instance_dir(&instance_id))
         .with_context(|| format!("writing quests for instance {instance_id}"))?;
 
-    // Slice 4: emit the curated v1 Origins datapack IFF this pack actually
-    // runs Origins core (project id `3BeIrqZR`, NOT the Origins-Classes
-    // addon) AND Open Loader is pinned (the datapack lives under
-    // `config/openloader/data`, so without Open Loader it would never load).
-    // Independent of the quest graph (v1 is a fixed curated set, no model
-    // input). Pure no-op — and no `anvil-origins/` root — otherwise, so
-    // non-Origins packs stay byte-for-byte unchanged.
+    // Emit the DETERMINISTIC rescue Origins datapack IFF this pack runs
+    // Origins core + Open Loader — UNLESS the model already authored a
+    // bespoke, validated set for this thread via generate_origins (in which
+    // case re-running the rescue write would clobber it). The rescue write is
+    // the fallback for packs where the model did not author origins; a model-
+    // authored set is written by tool_generate_origins itself. Non-Origins
+    // packs stay byte-for-byte unchanged.
     let has_origins_core = inst
         .mods
         .iter()
@@ -3103,7 +3273,8 @@ async fn tool_generate_quests(
         };
         needle(&m.project_id) || needle(&m.name) || needle(&m.path)
     });
-    if has_origins_core && has_open_loader {
+    let authored = thread_id.is_some_and(crate::chat::origins_authored);
+    if has_origins_core && has_open_loader && !authored {
         crate::origins::write_origins_datapack(
             &instance_dir(&instance_id),
             "anvil",
