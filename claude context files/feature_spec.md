@@ -265,3 +265,25 @@ version-pinned manifest snapshot; updates are explicit and diffed (L1).
 
 *End of feature spec v0.1. Decisions in §2 are locked. Next deliverable on go-ahead:
 `tech_stack.md` + a detailed Phase 0/1 implementation plan.*
+
+---
+
+## Addendum — 2026-05-16
+
+- **Mod sources: Modrinth-only UPHELD.** CurseForge was evaluated and rejected.
+  Rationale: the CurseForge API requires a key (no keyless path like Modrinth),
+  many projects set `allowModDistribution=false` (forcing a manual browser
+  download — directly violating the locked "zero-intervention auto-download"),
+  and CurseForge entries are not representable in a spec-compliant `.mrpack`
+  `files[]` (domain whitelist). This re-confirms §2 and L2 rather than changing
+  them.
+- **Quest target changed: FTB Quests → Heracles.** FTB Quests is CurseForge-only
+  (not solvable under Modrinth-only). Heracles *is* on Modrinth, published under
+  the name **"Odyssey Quests"** (slug `odyssey-quests`, `terrarium-earth/Heracles`),
+  and is config-folder distributable / machine-writable — so it satisfies the
+  same machine-writable requirement as FTB Quests while staying Modrinth-only.
+  Constraint inherited from the mod: **MC 1.20.1, fabric/forge**, requires
+  `resourceful-lib`. `quest.rs` now emits Heracles quest JSON
+  (`config/heracles/quests/<id>.json`); the `QuestGraph` IR, grounding index,
+  and `validate_graph` correctness gate are unchanged. The §4-F note that named
+  Heracles only as a 1.20.1 *fallback* is superseded: it is now the target.

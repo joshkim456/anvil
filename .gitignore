@@ -8,6 +8,11 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 
+# Secrets: never commit the real .env (only .env.example is tracked)
+.env
+.env.*
+!.env.example
+
 # Anvil runtime data (instances, downloaded jars, caches)
 .anvil/
 

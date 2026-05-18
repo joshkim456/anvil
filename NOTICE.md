@@ -28,5 +28,13 @@ Rust implementation built on permissively licensed crates.
   a user-supplied API key stored locally in `~/.anvil/settings.json` (0600).
   No shared key is shipped.
 
+## Bundled assets
+
+- **Monocraft** — the app's display typeface is Monocraft by Idrees Hassan
+  (https://github.com/IdreesInc/Monocraft), a smooth Minecraft-style font.
+  Licensed under the **SIL Open Font License v1.1** (OFL-1.1), which is
+  compatible with GPL-3.0. The font files and full license text live in
+  [`public/fonts/`](./public/fonts/) (`Monocraft-LICENSE.txt`).
+
 See `claude context files/feature_spec.md` for the full design and the locked
 non-negotiables (N1–N5).

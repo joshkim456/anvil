@@ -18,20 +18,21 @@ Anvil is a working desktop app (macOS / Windows via Tauri). What is built:
 | Area | State |
 |---|---|
 | **Browse mods** | Live Modrinth catalog, pre-populated, with sort, MC version, loader, multi-select genre filters and infinite scroll. Modrinth-style mod detail (description, versions, dependencies, environment, license, links). |
-| **Curator** | Conversational modpack designer: Anthropic Messages API streaming with a tool-use loop (`search_mods`, `get_mod`, `validate_pack`, `assemble_pack`) over the live Modrinth catalog and the pack engine. Free-form chat that probes for theme, version + loader, single vs. multiplayer, and performance target before proposing, with per-mod rationale. |
+| **Curator** | Conversational modpack designer: Anthropic Messages API streaming with a phased tool-use loop (`propose_pack`, `search_mods`, `get_mod`, `validate_pack`, `assemble_pack`, `verify_pack`, `seed_from_pack`, `generate_quests`, `query_registry`) over the live Modrinth catalog and the pack engine. Free-form chat that probes for theme, version + loader, single vs. multiplayer, and performance target before proposing, with per-mod rationale. |
 | **Pack engine** | Transitive dependency-closure resolution, `validate_pack` (loader / MC / side-flag / duplicate / insecure-URL gate), standard `.mrpack` emit and import. Covered by `cargo test`. |
-| **Instances** | Version-pinned instance model with persistence; `.mrpack` import. |
-| **Sign in with Microsoft** | Full device-code OAuth chain (MSA, Xbox Live, XSTS, Minecraft Services). Uses the official Microsoft identity platform; users sign in to their own accounts. Authentication is never bypassed or emulated. |
-| **Launch core** | Custom Rust launcher: Mojang piston-meta version manifest, library/native and asset download, Fabric and Quilt loader install, classpath/JVM/argument construction, live log streaming. Vanilla + Fabric + Quilt implemented; Forge/NeoForge planned. |
+| **Progression** | AI-authored progression graph: ordered quest chapters, custom recipes, and self-contained content/boss encounters, emitted as Heracles quest JSON plus Open Loader datapacks. Every id is grounded against the resolved pack's real registry (a fabricated id is rejected, not shipped). Implemented and unit-tested; end-to-end in-game verification is in progress. |
+| **Instances** | Version-pinned instance model with persistence; `.mrpack` import; duplicate-by-name reuse; configurable light/dark theme. |
+| **Sign in with Microsoft** | Legacy MSA OAuth (authorization code + PKCE) → Sisu → Xbox Live → XSTS → Minecraft Services, using the well-known public Minecraft-launcher client id. Uses the official Microsoft identity platform; users sign in to their own accounts. Authentication is never bypassed or emulated. |
+| **Launch core** | Custom Rust launcher: Mojang piston-meta version manifest, library/native and asset download with host-arch native selection, Fabric and Quilt loader install with newest-stable loader resolution, classpath/JVM/argument construction, live log streaming. Vanilla + Fabric + Quilt implemented; Forge/NeoForge planned. |
 
-Known external gate: calling Minecraft's `login_with_xbox` API requires the
-Azure application's client ID to be approved by Microsoft/Mojang via
-<https://aka.ms/mce-reviewappid>. Established launchers each ship an
-individually approved client ID; a freshly registered app returns
-`403 Invalid app registration` until approval. Anvil's auth code is complete
-and correct; sign-in becomes usable once the bundled client ID is approved or
-a user supplies their own approved ID in Settings. This is a Microsoft policy
-gate, not a code limitation.
+Known external gate: Minecraft's `login_with_xbox` API only accepts a
+Microsoft-approved client id. Anvil ships the well-known public
+Minecraft-launcher client id that established open-source launchers use; a
+freshly registered Azure app returns `403 Invalid app registration` until
+approved via <https://aka.ms/mce-reviewappid>. The auth chain is implemented
+and the crypto path is unit-tested; sign-in is usable with an approved client
+id, and a user can supply their own approved id in Settings. This is a
+Microsoft policy surface, not a code limitation.
 
 ## Features
 
@@ -39,6 +40,11 @@ gate, not a code limitation.
   Claude asks natural follow-ups, searches real Modrinth mods (never invented),
   explains each inclusion, validates the set, and assembles a real instance and
   `.mrpack`.
+- **Authored progression.** Optionally, Claude designs an ordered questline
+  with custom recipes and self-contained boss/content encounters, delivered as
+  Heracles quest JSON and Open Loader datapacks. Every entity, item, and recipe
+  id is grounded against the resolved pack's real registry, so a quest never
+  references something the pack does not contain.
 - **Full catalog browser.** Popular-by-default grid, sort (Popular / Relevant /
   Followed / Updated / Newest), MC version, loader, and multi-select genre, with
   infinite scroll and a Modrinth-style detail view.
@@ -59,9 +65,12 @@ gate, not a code limitation.
 │        ▲ events (stream / logs / progress)  │ commands       │
 │  Rust core                                                   │
 │   • modrinth   live catalog client (contact User-Agent)      │
-│   • curator    Anthropic Messages API SSE + tool-use loop    │
+│   • curator    Anthropic Messages API SSE + phased tool loop │
 │   • pack       dep resolution · validate · .mrpack I/O       │
-│   • auth       MSA device-code · Xbox · XSTS · Minecraft     │
+│   • quest/recipe/content  progression graph → Heracles +     │
+│                Open Loader datapacks                          │
+│   • registry   real-id grounding for authored progression    │
+│   • auth       MSA auth-code+PKCE · Sisu · Xbox · XSTS · MC  │
 │   • launch     manifest · assets · loader · JVM · log stream │
 │   • instance   version-pinned profiles + persistence         │
 └──────────────────────────────────────────────────────────────┘
@@ -103,32 +112,47 @@ npm run tauri build        # produces a .app + .dmg (macOS) / installer (Windows
 
 ```
 src/                      React + TypeScript frontend
-  surfaces/               Curator · Browse · Instances · Settings
+  surfaces/               Curator · Browse · Instances · Quests · Settings
   components/              Dropdown, ModDetail, ...
+  lib/                     api · theme · Minecraft keybinds
 src-tauri/src/
   lib.rs                  Tauri commands + event bridging
   modrinth.rs             Modrinth API v2 client
-  curator.rs              Anthropic streaming + tool-use loop
+  curator.rs              Anthropic streaming + phased tool-use loop
+  chat.rs                 conversation/session state
   pack.rs                 dependency resolver · validate · .mrpack
+  quest.rs                progression graph + Heracles emit + grounding
+  recipe.rs               custom-recipe facet → Open Loader datapack
+  content.rs              self-contained boss/content provisioning
+  registry.rs             real-id registry vocab + grounding
+  origins.rs              Origins/Apoli powers datapack (design)
   auth.rs                 Microsoft / Xbox / Minecraft sign-in
   launch.rs               custom Minecraft launch core
   instance.rs             instance model + persistence
+  cache.rs                on-disk catalog/response cache
+  keybinds.rs             default Minecraft keybind options
   settings.rs             settings + on-disk paths
-claude context files/     design docs (feature_spec.md)
+src-tauri/tests/          real-data fixtures (Modrinth + codec shapes)
+claude context files/     design docs: feature_spec.md,
+                          progression_system_design.md,
+                          progression_detection_spec.md
 ```
 
 ## Tech stack
 
 - **Tauri 2** (Rust core) + **React 18** + **TypeScript** + **Vite**.
 - Rust: `reqwest` (rustls), `tokio`, `serde`/`serde_json`, `futures-util`,
-  `anyhow`, `thiserror`, `sha2`, `hex`, `zip`, `chrono`, `tracing`.
+  `anyhow`, `thiserror`, `sha2`, `hex`, `zip`, `chrono`, `tracing`;
+  `p256`/`base64`/`rand`/`uuid` for the MSA sign-in crypto path.
 - No bundled secrets. No mod jars redistributed.
 
 ## Roadmap
 
-Phased plan in [`claude context files/feature_spec.md`](./claude%20context%20files/feature_spec.md).
-Next: Forge/NeoForge launch, JRE auto-provisioning, SQLite catalog cache,
-OS-keychain secret storage, AI-authored difficulty curve and node-graph quests.
+Phased plans in [`claude context files/feature_spec.md`](./claude%20context%20files/feature_spec.md)
+and [`progression_system_design.md`](./claude%20context%20files/progression_system_design.md).
+Next: end-to-end in-game verification of authored progression, per-genre
+chapter-archetype adaptation, Forge/NeoForge launch, JRE auto-provisioning,
+SQLite catalog cache, OS-keychain secret storage.
 
 ## Legal and licensing
 
@@ -146,3 +170,6 @@ OS-keychain secret storage, AI-authored difficulty curve and node-graph quests.
 
 - [Modrinth](https://modrinth.com) for the open mod catalog and API.
 - [Anthropic](https://www.anthropic.com) Claude for the curation model.
+- [Heracles](https://modrinth.com/mod/heracles) and
+  [Open Loader](https://modrinth.com/mod/open-loader) for the quest and
+  datapack delivery the progression layer targets.
