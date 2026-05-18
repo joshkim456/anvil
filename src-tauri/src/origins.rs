@@ -796,6 +796,231 @@ pub fn write_validated_origins(
 }
 
 // ---------------------------------------------------------------------------
+// Read-back — reconstruct an `OriginsSet` from an on-disk datapack so the UI
+// can show what an instance actually ships. The INVERSE of `emit`: defensive
+// (a malformed individual file is skipped, never panics), tolerant of the
+// icon being `{"item":...}` / a bare string / missing, and DETERMINISTIC
+// (filesystem `read_dir` is unordered, so the result is explicitly sorted).
+// This is read-only; it never validates and never writes.
+// ---------------------------------------------------------------------------
+
+/// Pull the icon item id out of an origin file's `icon` field. Accepts the
+/// emitted `{"item":"<id>"}` object, a bare `"<id>"` string, or a missing /
+/// unparseable field (=> the safe `minecraft:nether_star` fallback so a bad
+/// icon never drops the whole origin).
+fn read_icon(v: Option<&serde_json::Value>) -> String {
+    const FALLBACK: &str = "minecraft:nether_star";
+    match v {
+        Some(serde_json::Value::Object(m)) => m
+            .get("item")
+            .and_then(|i| i.as_str())
+            .unwrap_or(FALLBACK)
+            .to_string(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        _ => FALLBACK.to_string(),
+    }
+}
+
+/// Reconstruct the `OriginsSet` from the datapack Anvil wrote into
+/// `instance_dir`. Returns `None` if the origins directory is absent or yields
+/// zero origins (an empty powers list alone is fine — a pack may reference
+/// only shipped powers). Origins are sorted by `(order, name)` and powers by
+/// `id` so the result is independent of `read_dir` order.
+pub fn read_origins(instance_dir: &Path) -> Option<OriginsSet> {
+    let base = instance_dir.join(ROOT).join("data").join("anvil");
+    let origins_dir = base.join("origins");
+    let powers_dir = base.join("powers");
+
+    // Origins directory is the gate: absent => no datapack here.
+    let origin_entries = std::fs::read_dir(&origins_dir).ok()?;
+
+    let mut origins: Vec<Origin> = Vec::new();
+    for entry in origin_entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(serde_json::Value::Object(m)) =
+            serde_json::from_str::<serde_json::Value>(&text)
+        else {
+            continue;
+        };
+        // name/description are plain non-empty strings (skip if not).
+        let (Some(name), Some(description)) = (
+            m.get("name").and_then(|v| v.as_str()),
+            m.get("description").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        if name.trim().is_empty() || description.trim().is_empty() {
+            continue;
+        }
+        let powers: Vec<String> = m
+            .get("powers")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let icon = read_icon(m.get("icon"));
+        let impact = m.get("impact").and_then(|v| v.as_i64()).unwrap_or(0);
+        let order = m.get("order").and_then(|v| v.as_i64()).unwrap_or(0);
+        origins.push(Origin {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: description.to_string(),
+            powers,
+            icon,
+            impact,
+            order,
+        });
+    }
+
+    if origins.is_empty() {
+        return None;
+    }
+
+    let mut powers: Vec<Power> = Vec::new();
+    if let Ok(power_entries) = std::fs::read_dir(&powers_dir) {
+        for entry in power_entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(serde_json::Value::Object(m)) =
+                serde_json::from_str::<serde_json::Value>(&text)
+            else {
+                continue;
+            };
+            let (Some(name), Some(description), Some(power_type)) = (
+                m.get("name").and_then(|v| v.as_str()),
+                m.get("description").and_then(|v| v.as_str()),
+                m.get("type").and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            if name.trim().is_empty()
+                || description.trim().is_empty()
+                || power_type.trim().is_empty()
+            {
+                continue;
+            }
+            // body = every key except the envelope (type/name/description).
+            let mut body = serde_json::Map::new();
+            for (k, val) in &m {
+                if k != "type" && k != "name" && k != "description" {
+                    body.insert(k.clone(), val.clone());
+                }
+            }
+            powers.push(Power {
+                id: id.to_string(),
+                name: name.to_string(),
+                description: description.to_string(),
+                power_type: power_type.to_string(),
+                body,
+            });
+        }
+    }
+
+    // Determinism: read_dir is unordered.
+    origins.sort_by(|a, b| a.order.cmp(&b.order).then_with(|| a.name.cmp(&b.name)));
+    powers.sort_by(|a, b| a.id.cmp(&b.id));
+
+    Some(OriginsSet { origins, powers })
+}
+
+/// Faithful display name + description for a SHIPPED Origins power (the bare
+/// id, no `origins:` prefix — i.e. the part after the colon). Wording sourced
+/// from the primary-source reference `docs/modding/origins_apoli_2.9.2_schema.md`
+/// (decompiled Origins 1.10.2). Any id not in the table — including a stray
+/// non-shipped ref — falls back to a prettified id + empty description so this
+/// is total and self-contained.
+pub fn shipped_power_label(id: &str) -> (String, String) {
+    let (name, desc): (&str, &str) = match id {
+        "water_breathing" => (
+            "Water Breathing",
+            "You can breathe underwater indefinitely.",
+        ),
+        "water_vision" => (
+            "Water Vision",
+            "You see clearly underwater, with no murky haze.",
+        ),
+        "aqua_affinity" => (
+            "Aqua Affinity",
+            "You mine at full speed while underwater.",
+        ),
+        "swim_speed" => ("Swim Speed", "You swim notably faster."),
+        "like_water" => (
+            "Like Water",
+            "Water does not slow you down — you act as if on land while submerged.",
+        ),
+        "slow_falling" => (
+            "Slow Falling",
+            "You fall slowly and take no fall damage.",
+        ),
+        "climbing" => (
+            "Climbing",
+            "You can climb any wall, spider-style.",
+        ),
+        "fire_immunity" => (
+            "Fire Immunity",
+            "You are immune to fire, lava damage, and burning.",
+        ),
+        "fall_immunity" => ("Fall Immunity", "You never take fall damage."),
+        "scare_creepers" => (
+            "Scare Creepers",
+            "Creepers are frightened of you and flee on sight.",
+        ),
+        "phantomize" => (
+            "Phantomize",
+            "You can phase into an incorporeal phantom form.",
+        ),
+        "elytra" => (
+            "Elytra",
+            "You can glide as if wearing an elytra, with no elytra item.",
+        ),
+        "cat_vision" => (
+            "Cat Vision",
+            "You see in the dark with feline night vision.",
+        ),
+        other => {
+            // Prettify `some_id` -> "Some Id"; empty description.
+            let pretty = other
+                .split(|c| c == '_' || c == '-')
+                .filter(|s| !s.is_empty())
+                .map(|w| {
+                    let mut ch = w.chars();
+                    match ch.next() {
+                        Some(f) => {
+                            f.to_uppercase().collect::<String>()
+                                + &ch.as_str().to_lowercase()
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            return (pretty, String::new());
+        }
+    };
+    (name.to_string(), desc.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Tests — REAL: jar-grounded catalog checks + emitted-shape + the exact
 // historical-failure regressions. (The deleted tests asserted the BUG.)
 // ---------------------------------------------------------------------------
@@ -1138,5 +1363,86 @@ mod tests {
         let set: OriginsSet = serde_json::from_value(bad).unwrap();
         let errs = validate(set).expect_err("must be rejected by the gate");
         assert!(errs.iter().any(|e| matches!(e, IntegrityError::BadPowerType { .. })));
+    }
+
+    // --- Read-back: write the rescue set, read it, assert the round-trip. ---
+
+    #[test]
+    fn read_origins_round_trips_the_written_datapack() {
+        let dir = tempfile::tempdir().unwrap();
+        write_origins_datapack(dir.path(), NS).expect("writes rescue datapack");
+
+        let got = read_origins(dir.path()).expect("read_origins finds the pack");
+        let want = rescue_set();
+
+        // Origins: compare by id (both sides sorted) on the round-tripping
+        // fields. `emit` namespaces local power refs (`tank_vitality` ->
+        // `anvil:tank_vitality`) so refs are compared by COUNT, not value.
+        let mut got_o = got.origins.clone();
+        got_o.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut want_o = want.origins.clone();
+        want_o.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(got_o.len(), want_o.len(), "origin count must match");
+        for (g, w) in got_o.iter().zip(&want_o) {
+            assert_eq!(g.id, w.id, "origin id");
+            assert_eq!(g.name, w.name, "origin {} name", w.id);
+            assert_eq!(g.description, w.description, "origin {} description", w.id);
+            assert_eq!(g.icon, w.icon, "origin {} icon", w.id);
+            assert_eq!(g.impact, w.impact, "origin {} impact", w.id);
+            assert_eq!(
+                g.powers.len(),
+                w.powers.len(),
+                "origin {} power-ref count",
+                w.id
+            );
+        }
+
+        // Powers: only LOCAL powers get a file; the rescue set has no shipped
+        // power as a `Power`, so the read-back power set is exactly the
+        // written one. Compare by id (both sorted) on every field.
+        let mut got_p = got.powers.clone();
+        got_p.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut want_p = want.powers.clone();
+        want_p.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(got_p.len(), want_p.len(), "power count must match");
+        for (g, w) in got_p.iter().zip(&want_p) {
+            assert_eq!(g.id, w.id, "power id");
+            assert_eq!(g.name, w.name, "power {} name", w.id);
+            assert_eq!(g.description, w.description, "power {} description", w.id);
+            assert_eq!(g.power_type, w.power_type, "power {} type", w.id);
+        }
+
+        // Determinism: origins sorted by (order, name); powers by id.
+        let orders: Vec<i64> = got.origins.iter().map(|o| o.order).collect();
+        let mut sorted = orders.clone();
+        sorted.sort();
+        assert_eq!(orders, sorted, "origins must be returned order-sorted");
+        let ids: Vec<&str> = got.powers.iter().map(|p| p.id.as_str()).collect();
+        let mut sorted_ids = ids.clone();
+        sorted_ids.sort();
+        assert_eq!(ids, sorted_ids, "powers must be returned id-sorted");
+    }
+
+    #[test]
+    fn read_origins_is_none_when_no_datapack() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_origins(dir.path()).is_none());
+    }
+
+    #[test]
+    fn shipped_power_label_covers_every_shipped_id_and_prettifies_unknown() {
+        for full in SHIPPED_ORIGINS_POWERS {
+            let bare = full.strip_prefix("origins:").unwrap_or(full);
+            let (name, desc) = shipped_power_label(bare);
+            assert!(!name.is_empty(), "shipped `{bare}` must have a name");
+            assert!(
+                !desc.is_empty(),
+                "shipped `{bare}` must have a faithful description"
+            );
+        }
+        // Unknown id => prettified, empty description (the total fallback).
+        let (n, d) = shipped_power_label("totally_unknown-thing");
+        assert_eq!(n, "Totally Unknown Thing");
+        assert!(d.is_empty());
     }
 }

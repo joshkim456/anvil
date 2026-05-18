@@ -6,7 +6,14 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { api, Instance, Quest, QuestGraph } from "../lib/api";
+import {
+  api,
+  Instance,
+  OriginEntry,
+  OriginsView as OriginsData,
+  Quest,
+  QuestGraph,
+} from "../lib/api";
 import { Dropdown, Opt } from "../components/Dropdown";
 
 // Compact cards: readable title (2 lines) + a tiny task count, nothing more.
@@ -80,8 +87,54 @@ function QuestCanvas({
       contentW = Math.max(contentW, x + CARD_W);
       contentH = Math.max(contentH, y + CARD_H);
     }
+
+    // Primary root of this chapter — the quest the Heracles bbox-centroid
+    // camera (and our reset view) should open on. Mirrors layout_chapter()
+    // in quest.rs exactly: intra-chapter in-degree 0, then largest forward
+    // closure, then lexicographically smallest id. Deriving it the same way
+    // keeps the in-app viewer pointed at the same quest the game opens on,
+    // for every chapter of every instance — no special-casing.
+    const ids = new Set(quests.map((q) => q.id));
+    const succ = new Map<string, string[]>();
+    const indeg = new Map<string, number>();
+    for (const q of quests) indeg.set(q.id, 0);
+    for (const q of quests)
+      for (const d of q.deps)
+        if (ids.has(d)) {
+          if (!succ.has(d)) succ.set(d, []);
+          succ.get(d)!.push(q.id);
+          indeg.set(q.id, (indeg.get(q.id) ?? 0) + 1);
+        }
+    let roots = [...ids].filter((id) => (indeg.get(id) ?? 0) === 0).sort();
+    if (roots.length === 0) roots = [...ids].sort().slice(0, 1); // cyclic
+    const closure = (start: string): number => {
+      const seen = new Set([start]);
+      const stack = [start];
+      while (stack.length) {
+        const u = stack.pop()!;
+        for (const c of succ.get(u) ?? [])
+          if (!seen.has(c)) {
+            seen.add(c);
+            stack.push(c);
+          }
+      }
+      return seen.size;
+    };
+    // roots is sorted ascending; only replacing on a *strictly* larger
+    // closure makes the lex-smallest of the max-closure roots win the tie.
+    let rootId: string | null = null;
+    let best = -1;
+    for (const r of roots) {
+      const c = closure(r);
+      if (c > best) {
+        best = c;
+        rootId = r;
+      }
+    }
+
     return {
       pos,
+      rootId,
       contentW,
       contentH,
       width: Math.max(contentW + 80, 320),
@@ -92,16 +145,35 @@ function QuestCanvas({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [view, setView] = useState({ x: 28, y: 20, z: 1 });
 
-  // Center this chapter's content in the viewport whenever the chapter
-  // changes (and on first mount once the viewport has a size).
+  // Open each chapter centered on its root quest — the same quest the
+  // Heracles in-game camera lands on — instead of on the content's
+  // bounding box. The old bbox math clamped to a 24px min offset, which
+  // for any chapter wider than the viewport pinned the whole graph to the
+  // left edge and made the folded tail (e.g. "Iron Shell") read as first.
+  // The canvas transform is `translate(x,y) scale(z)` with origin (0,0),
+  // so a canvas-local point p maps to screen `view + p*z`; solve for the
+  // offset that puts the root card's center at the viewport center.
   function centerView() {
     const vp = viewportRef.current;
     const vw = vp?.clientWidth ?? 0;
     const vh = vp?.clientHeight ?? 0;
+    const z = 1;
+    const root = layout.rootId ? layout.pos.get(layout.rootId) : undefined;
+    if (root) {
+      const cx = root.x + CARD_W / 2;
+      const cy = root.y + CARD_H / 2;
+      setView({
+        x: Math.round(vw / 2 - cx * z),
+        y: Math.round(vh / 2 - cy * z),
+        z,
+      });
+      return;
+    }
+    // Empty/degenerate chapter: fall back to centering the bounding box.
     setView({
       x: Math.max(24, Math.round((vw - layout.contentW) / 2)),
       y: Math.max(20, Math.round((vh - layout.contentH) / 2)),
-      z: 1,
+      z,
     });
   }
   useEffect(() => {
@@ -188,7 +260,7 @@ function QuestCanvas({
           style={{
             width: layout.width,
             height: layout.height,
-            transform: `translate(${view.x}px, ${view.y}px) scale(${view.z})`,
+            transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.z})`,
           }}
         >
           <svg
@@ -713,6 +785,155 @@ function QuestDrawer({
   );
 }
 
+/** The origin's emblem: the real item icon (reuses the shared `useItemIcon`
+ *  fetcher + `SlotImg` strip-aware renderer), or a short labeled fallback
+ *  while loading / when the id can't be resolved. Mirrors RecipeSlot's
+ *  fallback (last `:` segment, underscores out) — no new prettifier. Sized
+ *  by the caller so the same component serves the rail (small) and the
+ *  detail header (large). */
+function OriginEmblem({
+  instanceId,
+  itemId,
+  size,
+}: {
+  instanceId: string;
+  itemId: string;
+  size: number;
+}) {
+  const icon = useItemIcon(instanceId, itemId);
+  const full = prettyId(itemId);
+  const short =
+    itemId.split(":").pop()?.replace(/_/g, " ") ?? itemId;
+  return (
+    <div
+      className="origins-emblem"
+      style={{ width: size, height: size }}
+      title={full}
+    >
+      {icon ? (
+        <SlotImg url={icon} alt={full} />
+      ) : (
+        <span className="recipe-slot-label">{short}</span>
+      )}
+    </div>
+  );
+}
+
+/** A 3-pip impact indicator. `impact` is clamped to [0,3] so an out-of-range
+ *  value from the backend never overflows the row of pips. */
+function ImpactPips({ impact }: { impact: number }) {
+  const n = Math.max(0, Math.min(3, Math.round(impact)));
+  return (
+    <span className="origins-impact" aria-label={`Impact ${n} of 3`}>
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className={"origins-pip" + (i < n ? " on" : "")}
+          aria-hidden
+        />
+      ))}
+    </span>
+  );
+}
+
+const IMPACT_WORD = ["Minimal", "Low", "Moderate", "High"] as const;
+
+/** The Origins viewer (Pattern A): a scrollable rail of origins on the left,
+ *  a read-only detail panel on the right. Faithful to the in-game Origins
+ *  screen — emblem, title, impact, description, then a Powers list with
+ *  shipped powers visually distinguished. No Select button (read-only). */
+function OriginsViewer({
+  instanceId,
+  origins,
+}: {
+  instanceId: string;
+  origins: OriginEntry[];
+}) {
+  const [idx, setIdx] = useState(0);
+  // The instance (and so the origins array) can change under us — clamp the
+  // selection back into range instead of rendering an undefined origin.
+  useEffect(() => setIdx(0), [origins]);
+  const sel = origins[Math.min(idx, origins.length - 1)] ?? origins[0];
+  const impact = Math.max(0, Math.min(3, Math.round(sel.impact)));
+
+  return (
+    <div className="origins-view">
+      <div className="origins-rail" role="tablist" aria-label="Origins">
+        {origins.map((o, i) => {
+          const active = o === sel;
+          return (
+            <button
+              key={o.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={"origins-row" + (active ? " active" : "")}
+              onClick={() => setIdx(i)}
+            >
+              <OriginEmblem
+                instanceId={instanceId}
+                itemId={o.icon}
+                size={32}
+              />
+              <span className="origins-row-name">{o.name}</span>
+              <ImpactPips impact={o.impact} />
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="origins-detail">
+        <div className="origins-detail-head">
+          <OriginEmblem
+            instanceId={instanceId}
+            itemId={sel.icon}
+            size={80}
+          />
+          <div className="origins-detail-heading">
+            <h3 className="origins-detail-title">{sel.name}</h3>
+            <span className="origins-detail-impact">
+              Impact: <ImpactPips impact={sel.impact} />{" "}
+              {IMPACT_WORD[impact]}
+            </span>
+          </div>
+        </div>
+
+        {sel.description && (
+          <p className="origins-detail-desc">{sel.description}</p>
+        )}
+
+        <div className="origins-powers">
+          <span className="quest-drawer-label">
+            Powers · {sel.powers.length}
+          </span>
+          {sel.powers.length === 0 ? (
+            <div className="card-hint">No powers.</div>
+          ) : (
+            sel.powers.map((p, i) => (
+              <div
+                className={
+                  "origins-power" + (p.shipped ? " shipped" : "")
+                }
+                key={i}
+              >
+                <div className="origins-power-head">
+                  <span className="origins-power-name">{p.name}</span>
+                  {p.shipped && (
+                    <span className="origins-power-badge">shipped</span>
+                  )}
+                </div>
+                {p.description && (
+                  <p className="origins-power-desc">{p.description}</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Quests() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [pick, setPick] = useState("");
@@ -723,6 +944,11 @@ export default function Quests() {
   const [sel, setSel] = useState<{ quest: Quest; chapter: string } | null>(
     null,
   );
+  // Origins live alongside the quest graph on the same instance pick. Their
+  // own fetch state mirrors the graph's; `origins === null` (or absent) means
+  // this instance has no Anvil origins, so the Origins tab must not appear.
+  const [origins, setOrigins] = useState<OriginsData | null>(null);
+  const [tab, setTab] = useState<"quests" | "origins">("quests");
 
   useEffect(() => {
     api
@@ -758,6 +984,29 @@ export default function Quests() {
     };
   }, [pick]);
 
+  // Origins fetch — independent of the graph fetch, same pick trigger.
+  // On every pick change we drop the Origins tab back to Quests; if the new
+  // instance has origins the user can switch to it, and if it doesn't the
+  // forced reset means we never strand the user on a now-empty Origins tab.
+  useEffect(() => {
+    if (!pick) return;
+    let alive = true;
+    setTab("quests");
+    setOrigins(null);
+    api
+      .getOrigins(pick)
+      .then((o) => {
+        if (!alive) return;
+        setOrigins(o);
+      })
+      .catch(() => {
+        if (alive) setOrigins(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [pick]);
+
   const instOpts: Opt[] = instances.map((i) => ({
     value: i.id,
     label: i.name,
@@ -788,24 +1037,63 @@ export default function Quests() {
             <Dropdown value={pick} options={instOpts} onChange={setPick} />
           </div>
 
-          {error && <div className="error">{error}</div>}
-
-          {loading && <div className="spinner">Loading quests.</div>}
-
-          {!loading && loaded && !graph && (
-            <div className="placeholder">
-              <strong>No quests yet</strong>
-              Ask the Curator to add a storyline to this pack.
+          {origins && origins.origins.length > 0 && (
+            <div className="quest-tabs" role="tablist">
+              <button
+                role="tab"
+                aria-selected={tab === "quests"}
+                className={"quest-tab" + (tab === "quests" ? " active" : "")}
+                onClick={() => setTab("quests")}
+              >
+                Quests
+              </button>
+              <button
+                role="tab"
+                aria-selected={tab === "origins"}
+                className={"quest-tab" + (tab === "origins" ? " active" : "")}
+                onClick={() => setTab("origins")}
+              >
+                Origins
+                <span className="quest-tab-count">
+                  {origins.origins.length}
+                </span>
+              </button>
             </div>
           )}
 
-          {!loading && graph && (
+          {tab === "quests" && (
+            <>
+              {error && <div className="error">{error}</div>}
+
+              {loading && <div className="spinner">Loading quests.</div>}
+
+              {!loading && loaded && !graph && (
+                <div className="placeholder">
+                  <strong>No quests yet</strong>
+                  Ask the Curator to add a storyline to this pack.
+                </div>
+              )}
+
+              {!loading && graph && (
+                <div className="quest-graph">
+                  <h2 className="quest-graph-title">{graph.title}</h2>
+                  <QuestCanvas
+                    graph={graph}
+                    selectedId={sel?.quest.id ?? null}
+                    onSelect={(quest, chapter) =>
+                      setSel({ quest, chapter })
+                    }
+                  />
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === "origins" && origins && origins.origins.length > 0 && (
             <div className="quest-graph">
-              <h2 className="quest-graph-title">{graph.title}</h2>
-              <QuestCanvas
-                graph={graph}
-                selectedId={sel?.quest.id ?? null}
-                onSelect={(quest, chapter) => setSel({ quest, chapter })}
+              <OriginsViewer
+                instanceId={pick}
+                origins={origins.origins}
               />
             </div>
           )}

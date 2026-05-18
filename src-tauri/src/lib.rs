@@ -791,6 +791,95 @@ fn validate_quest_graph(
     quest::validate_graph(&graph, &idx)
 }
 
+/// One power as the Origins viewer shows it. `shipped` distinguishes a power
+/// Origins itself ships (label resolved from the faithful table) from a power
+/// Anvil emitted a file for (label is that power's own name/description).
+#[derive(Serialize)]
+struct OriginPowerView {
+    name: String,
+    description: String,
+    shipped: bool,
+}
+
+#[derive(Serialize)]
+struct OriginEntryView {
+    id: String,
+    name: String,
+    description: String,
+    icon: String,
+    impact: i64,
+    powers: Vec<OriginPowerView>,
+}
+
+#[derive(Serialize)]
+struct OriginsView {
+    origins: Vec<OriginEntryView>,
+}
+
+/// Read-back of the instance's on-disk Origins datapack for the in-app viewer.
+/// `Ok(None)` => the instance has no `anvil-origins` datapack (the UI shows
+/// nothing). Offloaded to a blocking thread: it walks a directory of files.
+#[tauri::command]
+async fn get_origins(instance_id: String) -> Result<Option<OriginsView>, String> {
+    tokio::task::spawn_blocking(move || {
+        let Some(set) = origins::read_origins(&instance::instance_dir(&instance_id))
+        else {
+            return None;
+        };
+        // Local power ids, for classifying each origin's refs.
+        let local: std::collections::BTreeMap<&str, &origins::Power> =
+            set.powers.iter().map(|p| (p.id.as_str(), p)).collect();
+        let origins_view = set
+            .origins
+            .iter()
+            .map(|o| {
+                let powers = o
+                    .powers
+                    .iter()
+                    .map(|r| {
+                        // Strip an optional namespace. `anvil:<id>` or a bare
+                        // `<id>` that names a local power => that local power.
+                        // Anything else (e.g. `origins:<id>`) => shipped label.
+                        let bare_local = r.strip_prefix("anvil:").unwrap_or(r);
+                        if let Some(p) = local.get(bare_local) {
+                            OriginPowerView {
+                                name: p.name.clone(),
+                                description: p.description.clone(),
+                                shipped: false,
+                            }
+                        } else {
+                            // Shipped: take the part after the colon (or the
+                            // whole ref if unqualified) for the label table.
+                            let pid =
+                                r.split_once(':').map(|(_, p)| p).unwrap_or(r);
+                            let (name, description) =
+                                origins::shipped_power_label(pid);
+                            OriginPowerView {
+                                name,
+                                description,
+                                shipped: true,
+                            }
+                        }
+                    })
+                    .collect();
+                OriginEntryView {
+                    id: o.id.clone(),
+                    name: o.name.clone(),
+                    description: o.description.clone(),
+                    icon: o.icon.clone(),
+                    impact: o.impact,
+                    powers,
+                }
+            })
+            .collect();
+        Some(OriginsView {
+            origins: origins_view,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 struct AppInfo {
     name: &'static str,
@@ -896,7 +985,8 @@ pub fn run() {
             get_quest_graph,
             save_quest_graph,
             get_item_icon,
-            validate_quest_graph
+            validate_quest_graph,
+            get_origins
         ])
         .run(tauri::generate_context!())
         .expect("error while running Anvil");

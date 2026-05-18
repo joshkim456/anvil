@@ -188,6 +188,25 @@ export interface QuestIssue {
   [k: string]: unknown;
 }
 
+export interface OriginPower {
+  name: string;
+  description: string;
+  shipped: boolean;
+}
+
+export interface OriginEntry {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  impact: number;
+  powers: OriginPower[];
+}
+
+export interface OriginsView {
+  origins: OriginEntry[];
+}
+
 export type ThemePref = "light" | "dark" | "system";
 
 export interface Settings {
@@ -365,4 +384,9 @@ export const api = {
    *  slot instead. Backed by an on-disk cache. */
   getItemIcon: (instanceId: string, itemId: string) =>
     invoke<string | null>("get_item_icon", { instanceId, itemId }),
+  /** The Anvil-curated origins for this instance, already sorted by impact
+   *  server-side. `null` ⟺ the instance has no Anvil origins — the Origins
+   *  tab must not appear at all. Non-null always carries ≥1 origin. */
+  getOrigins: (instanceId: string) =>
+    invoke<OriginsView | null>("get_origins", { instanceId }),
 };
