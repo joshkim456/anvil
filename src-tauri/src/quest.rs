@@ -2189,16 +2189,9 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
             // stated in-game). It then flows through the shared em-dash
             // sanitizer with the model's prose below.
             let desc_src = match q.content.as_ref() {
-                Some(spec) => {
-                    let summon = crate::content::summon_instructions(
-                        &ch.id, &q.id, spec,
-                    );
-                    if q.description.trim().is_empty() {
-                        summon
-                    } else {
-                        format!("{summon}\n\n{}", q.description)
-                    }
-                }
+                Some(spec) => crate::content::summon_description(
+                    &ch.id, &q.id, spec, &q.description,
+                ),
                 None => q.description.clone(),
             };
             // Multi-line descriptions become a string list (one per line);

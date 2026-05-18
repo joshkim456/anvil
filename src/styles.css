@@ -2326,6 +2326,10 @@ a {
   color: var(--ink-soft);
   line-height: 1.6;
   font-size: 13.5px;
+  /* Boss nodes get the summon ritual prepended as its own paragraph
+     ("…within 3 blocks.\n\n<lore>"). Without this, <p> collapses the
+     newlines and ritual + lore render as one wall of text. */
+  white-space: pre-line;
 }
 
 .quest-drawer-section {
@@ -2462,7 +2466,10 @@ a {
   flex: none;
 }
 
-.recipe-craft .recipe-slot:last-child {
+/* The result slot only — a *direct* child of .recipe-craft. Without the
+   child combinator this also matched grid cell 8 (the :last-child of the
+   nested .recipe-grid), enlarging/tinting the bottom-right input. */
+.recipe-craft > .recipe-slot:last-child {
   width: 50px;
   height: 50px;
   border-color: var(--accent-edge);

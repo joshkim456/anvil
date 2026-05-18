@@ -1939,8 +1939,8 @@ async fn jar_augment(
         let Some(man) = crate::registry::jar_manifest(&bytes) else {
             continue;
         };
-        for p in &man.provided {
-            provided.insert(p.clone());
+        for (modid, _ver) in &man.provided {
+            provided.insert(modid.clone());
         }
         for (modid, _range) in &man.requires {
             requires.push((e.project_id.clone(), modid.clone()));
@@ -2321,7 +2321,7 @@ async fn edit_instance_mods_with_state(
         // Modids the removed project provides (from its real jar manifest).
         let provided_ids: Vec<String> = manifests
             .get(rp)
-            .map(|m| m.provided.clone())
+            .map(|m| m.provided.iter().map(|(modid, _)| modid.clone()).collect())
             .unwrap_or_default();
         // Any kept mod whose jar manifest still requires one of those modids.
         let mut required_by: Vec<String> = Vec::new();
@@ -2591,8 +2591,8 @@ async fn resolve_pack_with_state(
                 let mut owner: std::collections::HashMap<&str, &str> =
                     std::collections::HashMap::new();
                 for (pid, m) in &*manifests {
-                    for p in &m.provided {
-                        owner.insert(p.as_str(), pid.as_str());
+                    for (modid, _ver) in &m.provided {
+                        owner.insert(modid.as_str(), pid.as_str());
                     }
                 }
                 let mut floor_relevant: std::collections::HashSet<String> =
@@ -2670,6 +2670,12 @@ async fn resolve_pack_with_state(
             all.extend(jar_issues);
             all.extend(audit_issues);
             all.extend(floor_issues); // hard KotlinMajorUnsatisfiable gate
+            // Step 3 (report-only): general depends/breaks range check over
+            // the final closure + real manifests. Flows through the existing
+            // combined_issues -> assemble/edit gate, so a violation now blocks
+            // pre-assemble instead of crashing Fabric at launch. Selection is
+            // unchanged here (Step 4 does the re-pin).
+            all.extend(pack::check_version_constraints(&entries, manifests));
             return Ok((entries, all));
         }
         for (pid, _pinned_vid) in &needed.projects {
@@ -2698,6 +2704,7 @@ async fn resolve_pack_with_state(
     let (entries, mut issues, _needed) =
         pack::resolve_dependencies(&roots, &pool, &failed, mc_version, loader);
     issues.extend(jar_issues);
+    issues.extend(pack::check_version_constraints(&entries, manifests));
     Ok((entries, issues))
 }
 
@@ -4859,8 +4866,9 @@ mod flk_floor_real_data_tests {
         m.insert(
             FLK_PID.to_string(),
             crate::registry::JarManifest {
-                provided: vec!["fabric-language-kotlin".into()],
+                provided: vec![("fabric-language-kotlin".into(), String::new())],
                 requires: vec![],
+                breaks: vec![],
                 version: String::new(),
             },
         );
@@ -4873,6 +4881,7 @@ mod flk_floor_real_data_tests {
                         "fabric-language-kotlin".into(),
                         ">=1.9.2+kotlin.1.8.10".into(),
                     )],
+                    breaks: vec![],
                     version: String::new(),
                 },
             );
@@ -5296,8 +5305,9 @@ mod edit_pack_real_data_tests {
         man.insert(
             "A".to_string(),
             crate::registry::JarManifest {
-                provided: vec!["amod".into()],
+                provided: vec![("amod".into(), String::new())],
                 requires: vec![],
+                breaks: vec![],
                 version: String::new(),
             },
         );
@@ -5306,6 +5316,7 @@ mod edit_pack_real_data_tests {
             crate::registry::JarManifest {
                 provided: vec![],
                 requires: vec![("amod".into(), "*".into())],
+                breaks: vec![],
                 version: String::new(),
             },
         );

@@ -73,6 +73,30 @@ pub enum ValidationIssue {
         needs_major: u32,
         present: u32,
     },
+    /// HARD, BLOCKING. General version-constraint violation across the
+    /// resolved set, evaluated with the real Fabric matcher (`crate::version`)
+    /// over the real jar manifests (incl. JIJ-bundled sub-module versions):
+    /// either a `depends` range a present provider does not satisfy
+    /// (`kind: Depends`, e.g. Indium needs `sodium >=0.5.11 <0.6`, present
+    /// 0.5.8), or a `breaks`/`conflicts` range a present version DOES fall in
+    /// (`kind: Breaks`, e.g. Immersive Portals breaks sodium ≠ 0.5.13). This
+    /// is the general subsumption of the FLK-specific Kotlin gate — it is the
+    /// class that produced "Incompatible mods found" at launch.
+    VersionConstraintUnsatisfied {
+        holder: String,
+        modid: String,
+        want: String,
+        have: String,
+        kind: ConstraintKind,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ConstraintKind {
+    /// A `depends` range the present provider version does not satisfy.
+    Depends,
+    /// A `breaks`/`conflicts` range the present version falls inside.
+    Breaks,
 }
 
 /// Gate that must pass before a pack is ever presented as "assembled".
@@ -334,8 +358,8 @@ pub fn version_floor_repins(
     // modid -> the project that provides it (from the real jar manifests).
     let mut owner: HashMap<&str, &str> = HashMap::new();
     for (pid, man) in manifests {
-        for p in &man.provided {
-            owner.insert(p.as_str(), pid.as_str());
+        for (modid, _ver) in &man.provided {
+            owner.insert(modid.as_str(), pid.as_str());
         }
     }
     // The closure carries ModEntry (no dates); resolve each to the candidate
@@ -549,9 +573,9 @@ pub fn audit_version_satisfaction(
     // modid -> (provider project_id, provider's own declared version)
     let mut provider: HashMap<&str, (&str, &str)> = HashMap::new();
     for (pid, m) in manifests {
-        for p in &m.provided {
+        for (modid, _ver) in &m.provided {
             provider
-                .entry(p.as_str())
+                .entry(modid.as_str())
                 .or_insert((pid.as_str(), m.version.as_str()));
         }
     }
@@ -579,7 +603,7 @@ pub fn audit_version_satisfaction(
             }
             // Requester is a leaf iff no OTHER entry requires any modid it provides.
             let req_provides: HashSet<&str> =
-                m.provided.iter().map(|s| s.as_str()).collect();
+                m.provided.iter().map(|(modid, _)| modid.as_str()).collect();
             let is_leaf = !entries.iter().any(|o| {
                 o.project_id != e.project_id
                     && manifests.get(&o.project_id).is_some_and(|om| {
@@ -591,7 +615,7 @@ pub fn audit_version_satisfaction(
             let addon = m
                 .provided
                 .first()
-                .cloned()
+                .map(|(modid, _)| modid.clone())
                 .unwrap_or_else(|| e.project_id.clone());
             if is_leaf {
                 drop_pids.insert(e.project_id.clone());
@@ -616,6 +640,133 @@ pub fn audit_version_satisfaction(
         .cloned()
         .collect();
     (kept, issues)
+}
+
+/// Report-only general version-constraint check (Step 3 of the resolver
+/// restructure). Evaluates EVERY resolved mod's `depends` and `breaks`/
+/// `conflicts` ranges against the actual version present in the resolved set
+/// — including JIJ-bundled sub-module versions — using the real Fabric
+/// matcher (`crate::version`). Pure; does NOT change selection (that is
+/// Step 4). This is what turns the silent "Incompatible mods found" launch
+/// crash into a precise pre-assemble block: the three crash failures
+/// (Indium→sodium floor, Immersive Portals→sodium `breaks`, LambDynamicLights
+/// →fabric-lifecycle-events-v1 JIJ sub-module floor) are exactly the
+/// `Depends`/`Breaks` cases below.
+///
+/// Deliberately silent on a *missing* modid (that is the existing
+/// `UnresolvedRequiredDependency` class — never double-report) and on an
+/// unparseable range/version (unknown ⇒ skip, never a false positive).
+pub fn check_version_constraints(
+    entries: &[ModEntry],
+    manifests: &HashMap<String, crate::registry::JarManifest>,
+) -> Vec<ValidationIssue> {
+    use crate::version::{satisfies, Version, VersionReq};
+
+    let present: HashSet<&str> =
+        entries.iter().map(|e| e.project_id.as_str()).collect();
+
+    // modid -> the highest provided version across the resolved set (a modid
+    // can be provided by several mods and/or JIJ-bundled; the dependent sees
+    // whichever Fabric loads, so check against the best available).
+    let mut have: HashMap<&str, &str> = HashMap::new();
+    for (pid, m) in manifests {
+        if !present.contains(pid.as_str()) {
+            continue;
+        }
+        for (modid, ver) in &m.provided {
+            match have.get(modid.as_str()) {
+                None => {
+                    have.insert(modid.as_str(), ver.as_str());
+                }
+                Some(cur) => {
+                    if let (Some(a), Some(b)) =
+                        (Version::parse(ver), Version::parse(cur))
+                    {
+                        if a > b {
+                            have.insert(modid.as_str(), ver.as_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut out: Vec<ValidationIssue> = Vec::new();
+    for e in entries {
+        let Some(m) = manifests.get(&e.project_id) else {
+            continue;
+        };
+        let holder = m
+            .provided
+            .first()
+            .map(|(modid, _)| modid.clone())
+            .unwrap_or_else(|| e.project_id.clone());
+
+        for (modid, range) in &m.requires {
+            let Some(&have_ver) = have.get(modid.as_str()) else {
+                continue; // missing entirely -> UnresolvedRequiredDependency's job
+            };
+            if have_ver.is_empty() {
+                continue; // version unknown (e.g. Forge JIJ) -> cannot judge
+            }
+            let Some(req) = VersionReq::parse(range) else {
+                // Skip (no false positive) but make the silence observable:
+                // a genuinely buggy author range otherwise vanishes.
+                tracing::warn!(
+                    holder = %holder, modid = %modid, range = %range,
+                    "unparseable `depends` version range — constraint left \
+                     unevaluated"
+                );
+                continue;
+            };
+            let Some(hv) = Version::parse(have_ver) else {
+                continue; // our-side version unparseable: cannot judge
+            };
+            if !satisfies(&hv, &req) {
+                out.push(ValidationIssue::VersionConstraintUnsatisfied {
+                    holder: holder.clone(),
+                    modid: modid.clone(),
+                    want: range.clone(),
+                    have: have_ver.to_string(),
+                    kind: ConstraintKind::Depends,
+                });
+            }
+        }
+
+        for (modid, range) in &m.breaks {
+            let Some(&have_ver) = have.get(modid.as_str()) else {
+                continue; // the broken mod is not present -> fine
+            };
+            if have_ver.is_empty() {
+                continue;
+            }
+            let Some(req) = VersionReq::parse(range) else {
+                tracing::warn!(
+                    holder = %holder, modid = %modid, range = %range,
+                    "unparseable `breaks` version range — constraint left \
+                     unevaluated"
+                );
+                continue;
+            };
+            let Some(hv) = Version::parse(have_ver) else {
+                continue;
+            };
+            if satisfies(&hv, &req) {
+                out.push(ValidationIssue::VersionConstraintUnsatisfied {
+                    holder: holder.clone(),
+                    modid: modid.clone(),
+                    want: range.clone(),
+                    have: have_ver.to_string(),
+                    kind: ConstraintKind::Breaks,
+                });
+            }
+        }
+    }
+
+    // Deterministic + de-duplicated (a modid can be reached twice).
+    out.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+    out.dedup();
+    out
 }
 
 /// Resolve the transitive `required`-dependency closure for `roots`.
@@ -1606,11 +1757,17 @@ mod tier2_tests {
     }
     fn man(provided: &[&str], requires: &[(&str, &str)]) -> JarManifest {
         JarManifest {
-            provided: provided.iter().map(|s| s.to_string()).collect(),
+            // Presence-only test fixtures: pair each modid with an empty
+            // version (these tests never assert provided versions).
+            provided: provided
+                .iter()
+                .map(|s| (s.to_string(), String::new()))
+                .collect(),
             requires: requires
                 .iter()
                 .map(|(a, b)| (a.to_string(), b.to_string()))
                 .collect(),
+            breaks: Vec::new(),
             version: String::new(),
         }
     }
@@ -1938,6 +2095,166 @@ mod tier2_tests {
             .0
             .is_empty(),
             "already pinned -> skip"
+        );
+    }
+}
+
+#[cfg(test)]
+mod constraint_check_tests {
+    //! Step 3 report-only pass driven by the EXACT strings from the real
+    //! "Incompatible mods found" launch crash (Indium / Immersive Portals /
+    //! Sodium / LambDynamicLights / fabric-api). Not a synthetic graph — the
+    //! ranges below are transcribed from the crash log.
+    use super::*;
+    use crate::registry::JarManifest;
+    use std::collections::HashMap;
+
+    fn entry(pid: &str) -> ModEntry {
+        ModEntry {
+            project_id: pid.into(),
+            version_id: format!("{pid}-v"),
+            path: format!("mods/{pid}.jar"),
+            sha1: "a".repeat(40),
+            sha512: "b".repeat(128),
+            downloads: vec![format!("https://cdn.modrinth.com/{pid}.jar")],
+            file_size: 1,
+            game_versions: vec!["1.20.1".into()],
+            loaders: vec!["fabric".into()],
+            client_side: "required".into(),
+            server_side: "optional".into(),
+        }
+    }
+    fn jm(
+        provided: &[(&str, &str)],
+        requires: &[(&str, &str)],
+        breaks: &[(&str, &str)],
+    ) -> JarManifest {
+        JarManifest {
+            provided: provided
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            requires: requires
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            breaks: breaks
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            version: String::new(),
+        }
+    }
+
+    /// Build the exact crash set; `sodium_ver` / `fle_ver` let a test flip
+    /// between the broken pins and the satisfying ones.
+    fn crash_set(
+        sodium_ver: &str,
+        fle_ver: &str,
+    ) -> (Vec<ModEntry>, HashMap<String, JarManifest>) {
+        let entries = ["sodium", "indium", "immersive_portals", "fabric-api", "lambdynlights"]
+            .iter()
+            .map(|p| entry(p))
+            .collect();
+        let mut m = HashMap::new();
+        m.insert(
+            "sodium".to_string(),
+            jm(&[("sodium", sodium_ver)], &[], &[]),
+        );
+        // Indium 1.0.36 requires Sodium >=0.5.11 (incl) and <0.6 (excl).
+        m.insert(
+            "indium".to_string(),
+            jm(&[("indium", "1.0.36+mc1.20.1")], &[("sodium", ">=0.5.11 <0.6")], &[]),
+        );
+        // Immersive Portals 5.2.0 is incompatible with any sodium before AND
+        // after 0.5.13 -> the only allowed value is exactly 0.5.13.
+        m.insert(
+            "immersive_portals".to_string(),
+            jm(
+                &[("immersive_portals", "5.2.0")],
+                &[],
+                &[("sodium", "<0.5.13 || >0.5.13")],
+            ),
+        );
+        // fabric-api JIJ-bundles the lifecycle-events sub-module at fle_ver.
+        m.insert(
+            "fabric-api".to_string(),
+            jm(
+                &[
+                    ("fabric-api", "0.92.2+1.20.1"),
+                    ("fabric-lifecycle-events-v1", fle_ver),
+                ],
+                &[],
+                &[],
+            ),
+        );
+        // LambDynamicLights 4.4.0 needs lifecycle-events >=2.2.22, AND
+        // declares a require on a mod that is entirely ABSENT (must NOT be
+        // reported here — that is UnresolvedRequiredDependency's job).
+        m.insert(
+            "lambdynlights".to_string(),
+            jm(
+                &[("lambdynlights", "4.4.0+1.20.1")],
+                &[
+                    ("fabric-lifecycle-events-v1", ">=2.2.22"),
+                    ("a-mod-not-in-this-pack", ">=1.0"),
+                ],
+                &[],
+            ),
+        );
+        (entries, m)
+    }
+
+    #[test]
+    fn flags_exactly_the_three_real_crash_failures() {
+        let (entries, manifests) =
+            crash_set("0.5.8+mc1.20.1", "2.2.21+1.20.1");
+        let issues = check_version_constraints(&entries, &manifests);
+
+        // Exactly three, and exactly these three.
+        assert_eq!(issues.len(), 3, "got: {issues:#?}");
+        let has = |holder: &str, modid: &str, k: ConstraintKind| {
+            issues.iter().any(|i| matches!(i,
+                ValidationIssue::VersionConstraintUnsatisfied { holder: h, modid: md, kind, .. }
+                if h == holder && md == modid && *kind == k))
+        };
+        assert!(has("indium", "sodium", ConstraintKind::Depends),
+            "Indium needs sodium >=0.5.11 <0.6, present 0.5.8");
+        assert!(has("immersive_portals", "sodium", ConstraintKind::Breaks),
+            "Immersive Portals breaks sodium != 0.5.13, present 0.5.8");
+        assert!(has("lambdynlights", "fabric-lifecycle-events-v1", ConstraintKind::Depends),
+            "LDL needs lifecycle-events >=2.2.22, JIJ-bundled 2.2.21");
+        // The absent dep is NOT double-reported here.
+        assert!(!issues.iter().any(|i| matches!(i,
+            ValidationIssue::VersionConstraintUnsatisfied { modid, .. }
+            if modid == "a-mod-not-in-this-pack")),
+            "missing dep must be left to UnresolvedRequiredDependency");
+    }
+
+    #[test]
+    fn zero_issues_when_pins_satisfy_all_constraints() {
+        // Sodium 0.5.13 satisfies BOTH Indium [0.5.11,0.6) AND Immersive
+        // Portals (== 0.5.13, so NOT in "<0.5.13 || >0.5.13"); fabric-api
+        // bundling lifecycle-events 2.2.22 satisfies LDL. The exact reachable
+        // fix Step 4 must produce.
+        let (entries, manifests) =
+            crash_set("0.5.13+mc1.20.1", "2.2.22+1.20.1");
+        let issues = check_version_constraints(&entries, &manifests);
+        assert!(issues.is_empty(), "no false positives; got: {issues:#?}");
+    }
+
+    #[test]
+    fn unparseable_range_is_skipped_not_false_flagged() {
+        let entries = vec![entry("sodium"), entry("weird")];
+        let mut m = HashMap::new();
+        m.insert("sodium".into(), jm(&[("sodium", "0.5.8")], &[], &[]));
+        m.insert(
+            "weird".into(),
+            jm(&[("weird", "1.0")], &[("sodium", "@@not-a-range@@")], &[]),
+        );
+        assert!(
+            check_version_constraints(&entries, &m).is_empty(),
+            "an unparseable constraint must never be a false positive"
         );
     }
 }

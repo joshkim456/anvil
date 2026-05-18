@@ -1023,7 +1023,7 @@ export default function Quests() {
   return (
     <>
       <div className="page-head">
-        <h2>Quests</h2>
+        <h2>Progression</h2>
       </div>
 
       {instances.length === 0 ? (

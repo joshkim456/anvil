@@ -380,6 +380,26 @@ pub fn summon_instructions(chapter_id: &str, node_id: &str, spec: &ContentSpec) 
     format!("{how} Defeat {display_name} to claim the {tname}.")
 }
 
+/// The content node's DISPLAYED description: the deterministic summon ritual
+/// followed by the model's prose (blank line between; ritual alone if there
+/// is no prose). Single source of truth for "what a boss quest's description
+/// reads as" — the Heracles export and the in-app quest viewer both call
+/// this, so the player sees the SAME hidden-ritual text in-game and in Anvil
+/// and the two can never drift.
+pub fn summon_description(
+    chapter_id: &str,
+    node_id: &str,
+    spec: &ContentSpec,
+    description: &str,
+) -> String {
+    let summon = summon_instructions(chapter_id, node_id, spec);
+    if description.trim().is_empty() {
+        summon
+    } else {
+        format!("{summon}\n\n{description}")
+    }
+}
+
 pub fn surfaced_task(chapter_id: &str, node_id: &str, spec: &ContentSpec) -> crate::quest::QuestTask {
     let hex = content_hex(chapter_id, node_id);
     let item = token_item_id(spec);

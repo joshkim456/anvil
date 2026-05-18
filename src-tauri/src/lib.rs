@@ -27,6 +27,8 @@ mod recipe;
 #[allow(dead_code)]
 mod registry;
 mod settings;
+#[allow(dead_code)]
+pub mod version;
 
 use curator::{ChatMsg, CuratorEvent};
 use instance::{Instance, PinnedMod};
@@ -753,7 +755,37 @@ async fn get_item_icon(
 
 #[tauri::command]
 fn get_quest_graph(instance_id: String) -> Option<QuestGraph> {
-    quest::load_graph(&instance::instance_dir(&instance_id))
+    let mut g = quest::load_graph(&instance::instance_dir(&instance_id))?;
+    // Boss summoning is a hidden ritual the player cannot otherwise
+    // discover. The ritual text is composed at Heracles-export time and
+    // never persisted to anvil-quests.json (which stays prose-pure), so
+    // the in-app viewer would otherwise show a boss node WITHOUT how to
+    // start the fight. Derive it here, in-memory only, from the SAME
+    // shared composer the Heracles export uses, so the drawer shows the
+    // exact text the game does and the two can never drift.
+    //
+    // SAFETY: this graph must never be round-tripped back through
+    // `save_quest_graph`/`write_quests` — the prepend would be persisted
+    // and re-prepended on the next read (doubling). Safe today because the
+    // viewer is read-only (the `saveQuestGraph` binding has no callers) and
+    // the curator persists from a raw `quest::load_graph`, not this command.
+    // If a quest editor ever calls `save_quest_graph`, strip this prefix
+    // (re-derive via `content::summon_instructions`) before persisting.
+    for ch in &mut g.chapters {
+        let cid = ch.id.clone();
+        for q in &mut ch.quests {
+            let Some(spec) = q.content.as_ref() else {
+                continue;
+            };
+            q.description = crate::content::summon_description(
+                &cid,
+                &q.id,
+                spec,
+                &q.description,
+            );
+        }
+    }
+    Some(g)
 }
 
 #[tauri::command]

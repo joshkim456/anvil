@@ -18,7 +18,7 @@ const NAV: { id: Surface; label: string; glyph: string }[] = [
   { id: "chat", label: "Curator", glyph: "✦" },
   { id: "browse", label: "Browse mods", glyph: "⌗" },
   { id: "instances", label: "Instances", glyph: "▦" },
-  { id: "quests", label: "Quests", glyph: "✶" },
+  { id: "quests", label: "Progression", glyph: "✶" },
   { id: "settings", label: "Settings", glyph: "⚙" },
 ];
 

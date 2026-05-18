@@ -615,8 +615,23 @@ pub const BUILTIN_MODIDS: &[&str] = &[
 /// intentionally ignored (Fabric does not enforce them).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct JarManifest {
-    pub provided: Vec<String>,
+    /// `(modid, version)` for every modid this jar makes available: its own
+    /// `id` + each `provides[]` alias (all paired with the jar's OWN
+    /// `version`), AND every JIJ-bundled nested module paired with that
+    /// nested `fabric.mod.json`'s OWN `version`. Version is `""` when absent
+    /// or unparseable (presence is still recorded). A resolver can now
+    /// evaluate a dependent's range against a *bundled* provider's version
+    /// (e.g. LambDynamicLights needs `fabric-lifecycle-events-v1 >=2.2.22`
+    /// while fabric-api bundles it at `2.2.21+...`).
+    pub provided: Vec<(String, String)>,
     pub requires: Vec<(String, String)>,
+    /// Negative constraints from `fabric.mod.json` `breaks` (and `conflicts`):
+    /// `(modid, declared_range)`, parsed identically to `depends`/`requires`
+    /// (string or array joined with `" || "`). The presence of `modid` at a
+    /// version inside this range means the two cannot coexist. Empty for
+    /// Forge (`mods.toml` has no analogous block on the 1.20.1 Fabric-first
+    /// target — see `parse_forge_manifest`).
+    pub breaks: Vec<(String, String)>,
     /// The mod's own declared version (fabric.mod.json `version`). Empty for
     /// Forge (its `mods.toml` usually has a `${file.jarVersion}` placeholder,
     /// not the real version) and when absent. Used by the exact-pin
@@ -681,7 +696,13 @@ pub fn jar_manifest(bytes: &[u8]) -> Option<JarManifest> {
         }
         if let Some(inner) = jar_provided_only(&buf) {
             for p in inner {
-                if !m.provided.contains(&p) {
+                // Modid-level dedup (unchanged behaviour): a modid already
+                // present — including from the outer jar itself — is not
+                // re-added. We intentionally do NOT key on `(modid, version)`
+                // here; a nested module appearing once is enough, and the
+                // first-seen version (depth-first) wins, matching the old
+                // first-seen-modid semantics.
+                if !m.provided.iter().any(|(id, _)| id == &p.0) {
                     m.provided.push(p);
                 }
             }
@@ -701,7 +722,7 @@ pub fn jar_manifest(bytes: &[u8]) -> Option<JarManifest> {
 /// is decompressed once, and also gives natural termination independent of the
 /// depth bound. A bundled library's own `depends` are still deliberately NOT
 /// collected (they ship bundled alongside it).
-fn jar_provided_only(bytes: &[u8]) -> Option<Vec<String>> {
+fn jar_provided_only(bytes: &[u8]) -> Option<Vec<(String, String)>> {
     /// Real Fabric JIJ is 2-3 deep (Origins->apoli->calio); 6 is generous
     /// headroom while still terminating on a malformed/cyclic jar.
     const MAX_JIJ_DEPTH: u8 = 6;
@@ -710,7 +731,7 @@ fn jar_provided_only(bytes: &[u8]) -> Option<Vec<String>> {
         bytes: &[u8],
         depth: u8,
         seen: &mut std::collections::HashSet<[u8; 32]>,
-        out: &mut Vec<String>,
+        out: &mut Vec<(String, String)>,
     ) {
         use sha2::{Digest, Sha256};
         if depth == 0 {
@@ -836,32 +857,58 @@ fn parse_fabric_manifest(body: &str) -> Option<JarManifest> {
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    let mut provided = vec![id];
+    // The mod's `id` and every `provides[]` alias are made available by THIS
+    // jar, so they ship at THIS jar's own declared `version`.
+    let mut provided: Vec<(String, String)> = vec![(id, version.clone())];
     if let Some(arr) = v.get("provides").and_then(|x| x.as_array()) {
-        provided.extend(arr.iter().filter_map(|x| x.as_str().map(str::to_string)));
+        provided.extend(
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| (s.to_string(), version.clone()))),
+        );
     }
-    let mut requires = Vec::new();
-    if let Some(obj) = v.get("depends").and_then(|x| x.as_object()) {
-        for (modid, range) in obj {
-            if is_builtin(modid) {
-                continue;
+
+    // Parse a constraint map (`depends` / `breaks` / `conflicts`) the same
+    // way: value is a range string OR an array of them (OR semantics; we keep
+    // the raw text joined with " || " for display + the conservative range
+    // check). `skip_builtins` is true only for `depends` (built-ins are always
+    // present so a hard require on them is noise); a `breaks` against a
+    // built-in is still meaningful and kept.
+    let parse_constraints = |key: &str, skip_builtins: bool| -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(obj) = v.get(key).and_then(|x| x.as_object()) {
+            for (modid, range) in obj {
+                if skip_builtins && is_builtin(modid) {
+                    continue;
+                }
+                let r = match range {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Array(a) => a
+                        .iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" || "),
+                    _ => "*".to_string(),
+                };
+                out.push((modid.clone(), r));
             }
-            let r = match range {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Array(a) => a
-                    .iter()
-                    .filter_map(|x| x.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" || "),
-                _ => "*".to_string(),
-            };
-            requires.push((modid.clone(), r));
         }
-    }
+        out
+    };
+
+    let mut requires = parse_constraints("depends", true);
     requires.sort();
+
+    // Negative constraints: Fabric `breaks` (hard incompat) plus the rarer
+    // `conflicts` (soft, but Fabric still surfaces it) — merged, since both
+    // mean "must not coexist with `modid` in this range".
+    let mut breaks = parse_constraints("breaks", false);
+    breaks.extend(parse_constraints("conflicts", false));
+    breaks.sort();
+
     Some(JarManifest {
         provided,
         requires,
+        breaks,
         version,
     })
 }
@@ -870,6 +917,11 @@ fn parse_fabric_manifest(body: &str) -> Option<JarManifest> {
 /// `[[dependencies.<owner>]]` block with `mandatory = true` is a hard require
 /// (its `modId` + `versionRange`). Hand-rolled (no toml crate), tolerant.
 fn parse_forge_manifest(body: &str) -> JarManifest {
+    // Forge `mods.toml` has no analogous incompatibility block on the 1.20.1
+    // Fabric-first target (`type = "incompatible"` only exists 1.20.4+), so
+    // `breaks` is intentionally left empty for Forge — see the `JarManifest`
+    // doc. The Forge `version` is a `${file.jarVersion}` build placeholder so
+    // every provided modid pairs with `""` (presence still recorded).
     let mut provided: Vec<String> = Vec::new();
     let mut requires: Vec<(String, String)> = Vec::new();
     let mut in_mods = false;
@@ -944,10 +996,11 @@ fn parse_forge_manifest(body: &str) -> JarManifest {
     // Forge `mods.toml` version is almost always a `${file.jarVersion}`
     // build-time placeholder, not a real version — leave empty (the exact-pin
     // audit then simply never fires for a Forge provider, which is fine: v1 is
-    // Fabric-only anyway).
+    // Fabric-only anyway). Each provided modid therefore pairs with `""`.
     JarManifest {
-        provided,
+        provided: provided.into_iter().map(|id| (id, String::new())).collect(),
         requires,
+        breaks: Vec::new(),
         version: String::new(),
     }
 }
@@ -1123,7 +1176,15 @@ mod tests {
                 "cloth-config":"*","modonomicon":">=1.77.3","trinkets":"*"}}"#,
         )]);
         let m = jar_manifest(&bytes).expect("fabric manifest");
-        assert_eq!(m.provided, vec!["spectrum", "spectrum_api"]);
+        // `id` + each `provides[]` alias, both paired with the host's own
+        // version (absent here -> ""). Presence still readable via `.0`.
+        assert_eq!(
+            m.provided,
+            vec![
+                ("spectrum".to_string(), String::new()),
+                ("spectrum_api".to_string(), String::new()),
+            ]
+        );
         // sorted, builtins removed
         assert_eq!(
             m.requires,
@@ -1168,7 +1229,13 @@ versionRange="[0.5,0.6)"
 "#,
         )]);
         let m = jar_manifest(&bytes).unwrap();
-        assert!(m.provided.contains(&"coolmod".to_string()));
+        // Forge provided modids pair with "" (jarVersion placeholder).
+        assert!(m
+            .provided
+            .iter()
+            .any(|(id, v)| id == "coolmod" && v.is_empty()));
+        // Forge has no incompat block on the 1.20.1 target -> breaks empty.
+        assert!(m.breaks.is_empty());
         // `forge` is built-in -> filtered; optional `jei` -> skipped.
         assert_eq!(m.requires, vec![("createbig".into(), "[0.5,0.6)".into())]);
     }
@@ -1200,27 +1267,56 @@ versionRange="[0.5,0.6)"
     /// `fabric` at the top level but JIJ-bundles ~50 `fabric-*-v1` modules.
     /// Those nested modids MUST be harvested or every dependent (Create,
     /// Sodium, …) is wrongly reported as needing a missing dependency.
+    /// Convenience: does `provided` contain this modid at any version?
+    /// Round-trip check that presence is still readable via `.0`.
+    fn has_id(provided: &[(String, String)], modid: &str) -> bool {
+        provided.iter().any(|(id, _)| id == modid)
+    }
+    /// Find the captured version for a modid (None if absent).
+    fn ver_of<'a>(provided: &'a [(String, String)], modid: &str) -> Option<&'a str> {
+        provided
+            .iter()
+            .find(|(id, _)| id == modid)
+            .map(|(_, v)| v.as_str())
+    }
+
     #[test]
     fn nested_jij_provided_modids_are_harvested() {
+        // Mimic fabric-api bundling fabric-lifecycle-events-v1 at a CONCRETE
+        // version (the real root-cause shape: a dependent ranges on this
+        // bundled module's version, which was previously dropped).
         let inner = jar_bytes(&[(
             "fabric.mod.json",
-            r#"{"id":"fabric-biome-api-v1","provides":["fabric-biome-api"]}"#,
+            r#"{"id":"fabric-lifecycle-events-v1","version":"2.2.21+afsd2024",
+                "provides":["fabric-lifecycle-events"]}"#,
         )]);
         let outer = jar_with_nested(
-            r#"{"id":"fabric-api","provides":["fabric"]}"#,
-            "fabric-biome-api-v1-0.92.9.jar",
+            r#"{"id":"fabric-api","version":"0.92.2+1.20.1","provides":["fabric"]}"#,
+            "fabric-lifecycle-events-v1-2.2.21+afsd2024.jar",
             &inner,
         );
         let m = jar_manifest(&outer).expect("manifest");
-        assert!(m.provided.contains(&"fabric-api".to_string()));
-        assert!(m.provided.contains(&"fabric".to_string()));
-        // The fix: the JIJ-bundled module id is now satisfied.
+        // Round-trip: presence still holds via `.0`.
+        assert!(has_id(&m.provided, "fabric-api"));
+        assert!(has_id(&m.provided, "fabric"));
+        // Outer jar's own id + alias carry the OUTER jar's own version.
+        assert_eq!(ver_of(&m.provided, "fabric-api"), Some("0.92.2+1.20.1"));
+        assert_eq!(ver_of(&m.provided, "fabric"), Some("0.92.2+1.20.1"));
+        // The fix: the JIJ-bundled module id is now satisfied AND its OWN
+        // nested version is captured (not just the modid).
         assert!(
-            m.provided.contains(&"fabric-biome-api-v1".to_string()),
-            "nested JIJ modid must be provided, got {:?}",
+            m.provided.contains(&(
+                "fabric-lifecycle-events-v1".to_string(),
+                "2.2.21+afsd2024".to_string()
+            )),
+            "nested JIJ modid+version must be captured, got {:?}",
             m.provided
         );
-        assert!(m.provided.contains(&"fabric-biome-api".to_string()));
+        // The nested module's `provides[]` alias carries the NESTED version.
+        assert_eq!(
+            ver_of(&m.provided, "fabric-lifecycle-events"),
+            Some("2.2.21+afsd2024")
+        );
     }
 
     /// The real Origins case: Origins `depends` on `calio`, does NOT bundle it
@@ -1229,23 +1325,38 @@ versionRange="[0.5,0.6)"
     /// assembler blocks. The recursive harvest must surface `calio`.
     #[test]
     fn deep_jij_origins_apoli_calio_is_harvested() {
-        let calio = jar_bytes(&[("fabric.mod.json", r#"{"id":"calio"}"#)]);
+        // Each nested module declares its OWN version; the harvest must pair
+        // each modid with the version from ITS fabric.mod.json (not the root).
+        let calio = jar_bytes(&[(
+            "fabric.mod.json",
+            r#"{"id":"calio","version":"1.11.2+mc.1.20.x"}"#,
+        )]);
         let apoli_with_calio = jar_with_nested(
-            r#"{"id":"apoli","depends":{"calio":">=1.11.0"}}"#,
+            r#"{"id":"apoli","version":"2.9.2+mc.1.20.x","depends":{"calio":">=1.11.0"}}"#,
             "calio-1.11.2+mc.1.20.x.jar",
             &calio,
         );
         let origins = jar_with_nested(
-            r#"{"id":"origins","depends":{"apoli":">=2.9.0","calio":">=1.11.0"}}"#,
+            r#"{"id":"origins","version":"1.10.2+mc.1.20.x","depends":{"apoli":">=2.9.0","calio":">=1.11.0"}}"#,
             "apoli-2.9.2+mc.1.20.x.jar",
             &apoli_with_calio,
         );
         let m = jar_manifest(&origins).expect("manifest");
-        assert!(m.provided.contains(&"origins".to_string()));
-        assert!(m.provided.contains(&"apoli".to_string()));
+        // Round-trip presence still holds via `.0`.
+        assert!(has_id(&m.provided, "origins"));
+        assert!(has_id(&m.provided, "apoli"));
         assert!(
-            m.provided.contains(&"calio".to_string()),
+            has_id(&m.provided, "calio"),
             "level-2 JIJ modid `calio` must be harvested, got {:?}",
+            m.provided
+        );
+        // Each modid pairs with the version from ITS OWN manifest.
+        assert_eq!(ver_of(&m.provided, "origins"), Some("1.10.2+mc.1.20.x"));
+        assert_eq!(ver_of(&m.provided, "apoli"), Some("2.9.2+mc.1.20.x"));
+        assert_eq!(
+            ver_of(&m.provided, "calio"),
+            Some("1.11.2+mc.1.20.x"),
+            "level-2 nested version must be the nested jar's own, got {:?}",
             m.provided
         );
     }
@@ -1255,7 +1366,10 @@ versionRange="[0.5,0.6)"
     /// contribute its modid. Guards the "skip == lose a provide" risk.
     #[test]
     fn duplicate_bundled_lib_still_provided_once() {
-        let lib = jar_bytes(&[("fabric.mod.json", r#"{"id":"sharedlib"}"#)]);
+        let lib = jar_bytes(&[(
+            "fabric.mod.json",
+            r#"{"id":"sharedlib","version":"3.1.0"}"#,
+        )]);
         let outer = {
             let mut buf = Vec::new();
             {
@@ -1274,10 +1388,134 @@ versionRange="[0.5,0.6)"
             buf
         };
         let m = jar_manifest(&outer).expect("manifest");
-        assert!(m.provided.contains(&"outermod".to_string()));
+        assert!(has_id(&m.provided, "outermod"));
         assert!(
-            m.provided.contains(&"sharedlib".to_string()),
+            has_id(&m.provided, "sharedlib"),
             "dedup must keep the provide, got {:?}",
+            m.provided
+        );
+        // SHA-256 byte-identical dedup: contributed exactly ONCE (modid-level
+        // dedup at the push site), and with its own nested version.
+        assert_eq!(
+            m.provided.iter().filter(|(id, _)| id == "sharedlib").count(),
+            1,
+            "byte-identical bundled lib must contribute once, got {:?}",
+            m.provided
+        );
+        assert_eq!(ver_of(&m.provided, "sharedlib"), Some("3.1.0"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 2 — negative constraints (`breaks` / `conflicts`)
+    // -----------------------------------------------------------------------
+
+    /// Realistic Immersive-Portals-style `breaks` (string range) PLUS a
+    /// `conflicts` block: both must land in `JarManifest.breaks` parsed the
+    /// same way `depends` is (raw range text preserved). A `breaks` against a
+    /// built-in is kept (unlike `depends`, where built-ins are noise).
+    #[test]
+    fn fabric_breaks_and_conflicts_captured() {
+        let bytes = jar_bytes(&[(
+            "fabric.mod.json",
+            r#"{"id":"immersive_portals","version":"3.0",
+                "breaks":{"sodium":"<0.5.13 || >0.5.13","fabric":">=999"},
+                "conflicts":{"optifabric":"*"}}"#,
+        )]);
+        let m = jar_manifest(&bytes).expect("fabric manifest");
+        // `breaks` + `conflicts` merged, sorted, range text verbatim.
+        assert!(
+            m.breaks.contains(&(
+                "sodium".to_string(),
+                "<0.5.13 || >0.5.13".to_string()
+            )),
+            "breaks must capture the raw range, got {:?}",
+            m.breaks
+        );
+        // built-in `fabric` is NOT filtered out of `breaks` (it is from
+        // `depends`); a hard incompat with a builtin is meaningful.
+        assert!(m.breaks.iter().any(|(id, _)| id == "fabric"));
+        // `conflicts` folded into the same `breaks` vec.
+        assert!(m
+            .breaks
+            .contains(&("optifabric".to_string(), "*".to_string())));
+        // depends untouched; this jar has none -> requires empty.
+        assert!(m.requires.is_empty());
+    }
+
+    /// `breaks` array form must join with `" || "` exactly like `depends`.
+    #[test]
+    fn fabric_breaks_array_range_joined() {
+        let bytes = jar_bytes(&[(
+            "fabric.mod.json",
+            r#"{"id":"m","breaks":{"badlib":["<1.0",">2.0"]}}"#,
+        )]);
+        let m = jar_manifest(&bytes).unwrap();
+        assert_eq!(
+            m.breaks,
+            vec![("badlib".to_string(), "<1.0 || >2.0".to_string())]
+        );
+    }
+
+    /// No negative constraints -> `breaks` is empty (does not spuriously
+    /// capture `depends`).
+    #[test]
+    fn fabric_no_breaks_is_empty() {
+        let bytes = jar_bytes(&[(
+            "fabric.mod.json",
+            r#"{"id":"m","depends":{"lib":">=1.0"}}"#,
+        )]);
+        let m = jar_manifest(&bytes).unwrap();
+        assert!(m.breaks.is_empty());
+        assert_eq!(m.requires, vec![("lib".into(), ">=1.0".into())]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 2 — real committed fixture jars (apoli/origins have real JIJ)
+    // -----------------------------------------------------------------------
+
+    /// `tests/fixtures/real/apoli-2.9.2.jar` JIJ-bundles `calio` and
+    /// `playerabilitylib` at concrete real versions — assert the harvest
+    /// captures the modid AND its real nested version, on a real jar.
+    #[test]
+    fn real_apoli_jar_captures_nested_module_versions() {
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/real/apoli-2.9.2.jar"),
+        )
+        .expect("committed apoli fixture present");
+        let m = jar_manifest(&bytes).expect("apoli manifest");
+        // Outer jar's own id + its real version.
+        assert_eq!(ver_of(&m.provided, "apoli"), Some("2.9.2+mc.1.20.x"));
+        // Level-1 JIJ: calio at its real bundled version.
+        assert_eq!(
+            ver_of(&m.provided, "calio"),
+            Some("1.11.2+mc.1.20.x"),
+            "real nested calio version must be captured, got {:?}",
+            m.provided
+        );
+        // PlayerAbilityLib's modid is `playerabilitylib`, bundled at 1.8.0.
+        assert_eq!(ver_of(&m.provided, "playerabilitylib"), Some("1.8.0"));
+    }
+
+    /// `tests/fixtures/real/origins-1.10.2.jar` bundles `apoli`, and `apoli`
+    /// itself bundles `calio` — a real-data DEEP (level-2) JIJ version capture.
+    #[test]
+    fn real_origins_jar_captures_deep_nested_version() {
+        let bytes = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/real/origins-1.10.2.jar"),
+        )
+        .expect("committed origins fixture present");
+        let m = jar_manifest(&bytes).expect("origins manifest");
+        assert_eq!(ver_of(&m.provided, "origins"), Some("1.10.2+mc.1.20.x"));
+        // Level-1: apoli (bundled in origins).
+        assert_eq!(ver_of(&m.provided, "apoli"), Some("2.9.2+mc.1.20.x"));
+        // Level-2: calio (origins -> apoli -> calio) — the deep harvest must
+        // surface its real version, not just its presence.
+        assert_eq!(
+            ver_of(&m.provided, "calio"),
+            Some("1.11.2+mc.1.20.x"),
+            "deep (level-2) real nested calio version must be captured, got {:?}",
             m.provided
         );
     }

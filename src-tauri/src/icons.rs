@@ -224,59 +224,59 @@ pub(crate) fn resolve_in_jar<R: Read + Seek>(
     read_bytes(z, &format!("assets/{tns}/textures/{tpath}.png"))
 }
 
-/// Vanilla item icon from an already-downloaded shared assets dir (a prior
-/// launch). The asset index maps a logical path to a content hash; objects
-/// live at `objects/<hh>/<hash>`. No index/object present -> `None` (we never
-/// fetch or bundle Mojang assets).
-fn vanilla_icon(name: &str) -> Option<Vec<u8>> {
-    let assets = settings::shared_mc_dir().join("assets");
-    let want = format!("minecraft/textures/item/{name}.png");
-    let indexes = std::fs::read_dir(assets.join("indexes")).ok()?;
-    for ent in indexes.flatten() {
-        let Ok(txt) = std::fs::read_to_string(ent.path()) else {
-            continue;
-        };
-        let Ok(j) = serde_json::from_str::<Value>(&txt) else {
-            continue;
-        };
-        if let Some(hash) = j
-            .get("objects")
-            .and_then(|o| o.get(&want))
-            .and_then(|e| e.get("hash"))
-            .and_then(Value::as_str)
-        {
-            let obj = assets
-                .join("objects")
-                .join(&hash[..2.min(hash.len())])
-                .join(hash);
-            if let Ok(b) = std::fs::read(&obj) {
-                return Some(b);
-            }
-        }
-    }
-    None
+/// Vanilla item/block icon from THIS instance's pinned version client jar
+/// (`versions/<v>/<v>.jar` -> `assets/minecraft/...`). Mojang ships item and
+/// block textures *inside* that jar; the hashed `assets/objects` store holds
+/// only sounds/lang/etc (it has no `minecraft/textures/item/*` entries at
+/// all), so the icon must be pulled from the jar — through the very same
+/// model->texture walker the modded path uses, with the `minecraft`
+/// namespace (vanilla model refs are unqualified, which `split_ns` already
+/// maps to `minecraft`). `None` if the jar is absent (game/version never
+/// downloaded) or the item has no flat sprite / drawable model. We still
+/// never fetch or bundle Mojang assets — the launcher already put the jar
+/// there.
+fn vanilla_icon(mc_version: &str, name: &str) -> Option<Vec<u8>> {
+    let jar = settings::shared_mc_dir()
+        .join("versions")
+        .join(mc_version)
+        .join(format!("{mc_version}.jar"));
+    let f = std::fs::File::open(&jar).ok()?;
+    let mut z = ZipArchive::new(f).ok()?;
+    resolve_in_jar(&mut z, "minecraft", name)
 }
 
 /// Outer resolver: `item_id` -> a `data:image/png;base64,...` URL, or `None`
-/// (the UI then renders a labeled slot). Disk-cached under
-/// `~/.anvil/icon-cache/<instance>/`. Vanilla goes through the shared-assets
-/// path; modded scans the instance's pinned jars (filename != asset namespace
-/// for some mods, so we try each jar rather than guess) and stops at the
-/// first hit.
+/// (the UI then renders a labeled slot). Disk-cached so the (heavier) jar
+/// walk + 3D render runs once per distinct item, not on every drawer open.
+/// Vanilla resolves from this instance's pinned version client jar and is
+/// cached shared per MC version (`icon-cache/_vanilla/<mc_version>/`, since
+/// `minecraft:*` art is identical across every instance on that version);
+/// modded scans the instance's pinned jars (filename != asset namespace for
+/// some mods, so we try each jar rather than guess), stops at the first hit,
+/// and is cached per instance (`icon-cache/<instance>/`).
 pub fn item_icon_data_url(instance_id: &str, item_id: &str) -> Option<String> {
     let (ns, name) = split_ns(item_id);
-    let bytes = if ns == "minecraft" {
-        vanilla_icon(&name)?
+    let inst = load_instances()
+        .into_iter()
+        .find(|i| i.id == instance_id)?;
+
+    let cache = if ns == "minecraft" {
+        settings::data_dir()
+            .join("icon-cache")
+            .join("_vanilla")
+            .join(&inst.mc_version)
     } else {
-        let cache = settings::data_dir().join("icon-cache").join(instance_id);
-        let cache_file =
-            cache.join(format!("{ns}__{}.png", name.replace('/', "_")));
-        if let Ok(b) = std::fs::read(&cache_file) {
-            b
+        settings::data_dir().join("icon-cache").join(instance_id)
+    };
+    let cache_file =
+        cache.join(format!("{ns}__{}.png", name.replace('/', "_")));
+
+    let bytes = if let Ok(b) = std::fs::read(&cache_file) {
+        b
+    } else {
+        let resolved = if ns == "minecraft" {
+            vanilla_icon(&inst.mc_version, &name)
         } else {
-            let inst = load_instances()
-                .into_iter()
-                .find(|i| i.id == instance_id)?;
             let dir = instance_dir(instance_id);
             let mut found: Option<Vec<u8>> = None;
             for m in &inst.mods {
@@ -289,11 +289,11 @@ pub fn item_icon_data_url(instance_id: &str, item_id: &str) -> Option<String> {
                     break;
                 }
             }
-            let b = found?;
-            let _ = std::fs::create_dir_all(&cache);
-            let _ = std::fs::write(&cache_file, &b);
-            b
-        }
+            found
+        }?;
+        let _ = std::fs::create_dir_all(&cache);
+        let _ = std::fs::write(&cache_file, &resolved);
+        resolved
     };
     Some(format!("data:image/png;base64,{}", B64.encode(&bytes)))
 }
