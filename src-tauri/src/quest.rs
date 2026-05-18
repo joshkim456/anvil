@@ -2249,19 +2249,20 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                 }
             }
 
-            // VERIFIED against the actual Heracles-fabric-1.20.1-1.1.13 jar
-            // bytecode (`QuestsWidget.shouldHide(Object2BooleanMap,
-            // QuestEntry, QuestDisplayStatus)`): at offset 89 `if_acmpne 181`,
-            // a `LOCKED` status falls through every branch to offset 181
-            // `iconst_0; ireturn` — `shouldHide` returns false unconditionally,
-            // so the quest is NEVER hidden and the WHOLE chapter tree is always
-            // visible (locked quests greyed, dep arrows drawn). It is also the
-            // codec default (`EnumCodec.of(...).fieldOf("hidden").orElse(
-            // LOCKED)`). The recursive `DEPENDENCIES_VISIBLE` branch is the one
-            // that progressively HIDES quests — emitting it (the prior, wrong
-            // belief that LOCKED hides) is exactly what collapsed each chapter
-            // to its single visible quest. So we emit `locked`, the
-            // All-the-Mods-style full web the design intends.
+            // `hidden` value: HYPOTHESIS, not verified. Both `locked` and
+            // `dependencies_visible` were each, in turn, "bytecode-verified
+            // correct" (QuestsWidget.shouldHide) and each then wrong in-game.
+            // We now know WHY the in-game tests were inconclusive: every prior
+            // run had a STALE, cross-generation-merged quest graph (the
+            // un-pruned `config/heracles/quests/` accumulation fixed above),
+            // so Heracles could never render the tree REGARDLESS of this
+            // field — the experiment was confounded, not the value disproven.
+            // Per lessons.md "stop re-reading bytecode after it's been wrong
+            // twice": this stays `locked` (the current best guess + codec
+            // default `orElse(LOCKED)`) and the FIRST clean regenerated run is
+            // the deciding evidence. If a coherent 1-root graph still doesn't
+            // render right with `locked`, change THIS one literal and relaunch
+            // — do not re-derive it from bytecode again.
             // Quest icon: a recipe node shows its primary result item; a
             // content/boss node shows the token it drops. Both are the
             // tangible thing the quest is *for*, so the questbook entry is no
@@ -2321,6 +2322,31 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
 pub fn write_quests(g: &QuestGraph, instance_dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(instance_dir)
         .with_context(|| format!("creating instance dir {}", instance_dir.display()))?;
+
+    // PRUNE the Anvil-owned generated trees before rewriting the fresh set.
+    // Heracles loads EVERY file in `config/heracles/quests/`, and Open Loader
+    // every file under each datapack root — but the per-quest / per-node hex
+    // ids change across regenerations, so without this prune stale files from
+    // a prior generation accumulate. Observed live (instance 18b0bf8e): 91
+    // quest files for a 47-quest graph, "Smoke on the Horizon" emitted twice
+    // with different ids/deps → Heracles merged an incoherent
+    // cross-generation dependency graph and could not render the tree (only
+    // an anomalous middle quest showed, never the root). Same prune-then-
+    // write discipline as `origins::write_files`. ONLY the three Anvil-
+    // quest-owned roots — `anvil-origins` is written by the SEPARATE origins
+    // path and must NOT be touched here; `config/heracles/groups.txt` is a
+    // single fixed path (overwritten, never accumulates) so it is left.
+    for owned in [
+        "config/heracles/quests",
+        "config/openloader/data/anvil-content",
+        "config/openloader/data/anvil-recipes",
+    ] {
+        let p = instance_dir.join(owned);
+        if p.exists() {
+            std::fs::remove_dir_all(&p)
+                .with_context(|| format!("pruning stale {}", p.display()))?;
+        }
+    }
 
     // Recompute a deterministic root-centered layout BEFORE anything is
     // written, so the source-of-truth JSON, the Heracles quest files, and the
@@ -2941,14 +2967,16 @@ mod tests {
         assert_eq!(v["display"]["description"][0], "line1");
         assert_eq!(v["display"]["description"][1], "line2");
         // Bytecode-verified against Heracles-fabric-1.20.1-1.1.13:
-        // `QuestsWidget.shouldHide` returns false unconditionally for a LOCKED
-        // status (offset 89 `if_acmpne 181` -> 181 `iconst_0; ireturn`), so
-        // `locked` makes the whole chapter tree always visible (locked greyed).
-        // `dependencies_visible` takes the recursive HIDE branch and collapses
-        // a chapter to one quest — the exact bug this asserts against.
+        // Determinism guard ONLY: pins that the emitted value is a stable,
+        // single literal — NOT a claim that `locked` is the in-game-correct
+        // value (that is an open empirical question; see the `hidden`
+        // comment in to_heracles_json + lessons.md). If a clean regenerated
+        // run proves another value, change the literal there AND here
+        // together; this test must never re-acquire a bytecode-truth claim.
         assert_eq!(
             v["settings"]["hidden"], "quest.heracles.locked",
-            "every quest must reveal the full tree, not hide until unlocked"
+            "hidden must be emitted as one deterministic literal (value TBD \
+             by a clean-graph relaunch, not by bytecode)"
         );
         // Tasks are an id-keyed map carrying the heracles:* type tags.
         let tasks = v["tasks"].as_object().expect("tasks object");
@@ -4816,11 +4844,12 @@ mod tests {
         );
     }
 
-    /// SURGICAL, EXPLICIT-ONLY one-shot: retrofit the already-on-disk live
-    /// instance `UCL: The Bentham Ultimatum` so its stale Heracles quest JSON
-    /// (emitted by an earlier build with the wrong `dependencies_visible`
-    /// visibility, which collapsed every chapter to one quest) is re-emitted
-    /// with the bytecode-verified `quest.heracles.locked` (full tree visible).
+    /// SURGICAL, EXPLICIT-ONLY one-shot: retrofit an already-on-disk live
+    /// instance so its stale Heracles quest JSON is re-emitted with the
+    /// CURRENT `hidden` literal. NOTE: `locked` here is the current best
+    /// guess, NOT a verified value (the prune fix in `write_quests` is the
+    /// real cross-generation-incoherence fix; the correct `hidden` value is
+    /// decided by a clean regenerated relaunch — see lessons.md).
     /// A code fix alone does NOT touch files already written by an earlier
     /// build. `#[ignore]` so it never runs in CI; a hard id guard + on-disk
     /// timestamped backup so it can only ever rewrite that one instance and
