@@ -55,6 +55,12 @@ pub enum ValidationIssue {
     /// is a leaf (nothing depends on it) so it was auto-dropped from the pack
     /// rather than shipping a guaranteed launch crash. INFORMATIONAL — this
     /// does NOT block assembly (the conflicting mod is already removed).
+    ///
+    /// DELIBERATELY DISTINCT from `VersionConstraintUnsatisfied` — do NOT
+    /// fold them. That one is a HARD block (no auto-fix possible); this one
+    /// means the offending LEAF was auto-pruned and the pack ships without
+    /// it. The behaviours are opposite; only `audit_version_satisfaction`
+    /// (which owns the leaf-drop logic) emits this.
     IncompatibleAddonDropped {
         addon: String,
         requires: String,
