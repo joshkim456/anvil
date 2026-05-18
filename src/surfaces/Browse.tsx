@@ -13,7 +13,7 @@ const SORT_OPTS: Opt[] = [
   { value: "newest", label: "Newest" },
 ];
 const MC_OPTS: Opt[] = [
-  { value: "", label: "Any MC version" },
+  { value: "", label: "Any version" },
   ...["1.21.1", "1.21", "1.20.1", "1.19.2", "1.18.2"].map((v) => ({
     value: v,
     label: v,

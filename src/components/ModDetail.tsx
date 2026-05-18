@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
-import { api, ModDetail as Detail } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { marked } from "marked";
+import DOMPurify from "dompurify";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { api, Instance, ModDetail as Detail } from "../lib/api";
+import { Dropdown, Opt } from "./Dropdown";
 
 /** Modrinth-style mod detail: description + versions table on the left,
  *  side-info (categories, links, environment, license) on the right. */
@@ -13,6 +17,12 @@ export default function ModDetail({
   const [data, setData] = useState<Detail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [pick, setPick] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
   useEffect(() => {
     let alive = true;
     api
@@ -23,6 +33,59 @@ export default function ModDetail({
       alive = false;
     };
   }, [idOrSlug]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .listInstances()
+      .then((list) => {
+        if (!alive) return;
+        setInstances(list);
+        if (list.length) setPick(list[0].id);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function addToInstance() {
+    const p = data?.project;
+    if (!p || !pick) return;
+    setAdding(true);
+    setAddError(null);
+    try {
+      await api.addModToInstance(pick, p.id);
+      setAdded(true);
+      setTimeout(() => setAdded(false), 2000);
+    } catch (e) {
+      setAddError(String(e));
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  const instOpts: Opt[] = instances.map((i) => ({
+    value: i.id,
+    label: i.name,
+  }));
+
+  // Modrinth bodies are Markdown with embedded HTML. Render then sanitize.
+  const bodyHtml = useMemo(() => {
+    const src = data?.project?.body || data?.project?.description || "";
+    if (!src) return "";
+    return DOMPurify.sanitize(marked.parse(src, { async: false }) as string);
+  }, [data]);
+
+  // Keep links from navigating the app webview; open them in the browser.
+  function openLink(e: React.MouseEvent<HTMLDivElement>) {
+    const a = (e.target as HTMLElement).closest("a");
+    const href = a?.getAttribute("href");
+    if (href && /^https?:/i.test(href)) {
+      e.preventDefault();
+      openUrl(href).catch(() => {});
+    }
+  }
 
   const p = data?.project;
 
@@ -71,7 +134,11 @@ export default function ModDetail({
               </div>
 
               <div className="section-label">Description</div>
-              <div className="body-text">{p.body || p.description}</div>
+              <div
+                className="body-text md"
+                onClick={openLink}
+                dangerouslySetInnerHTML={{ __html: bodyHtml }}
+              />
 
               <div className="section-label">
                 Versions ({data.versions.length})
@@ -101,13 +168,31 @@ export default function ModDetail({
             </div>
 
             <div className="detail-side">
-              <button
-                className="btn"
-                style={{ width: "100%", marginBottom: 18 }}
-                disabled
-              >
-                Add to instance
-              </button>
+              <div className="add-inst">
+                {instances.length === 0 ? (
+                  <div className="card-hint">Create an instance first.</div>
+                ) : (
+                  <>
+                    <Dropdown
+                      value={pick}
+                      options={instOpts}
+                      onChange={setPick}
+                    />
+                    <button
+                      className="btn"
+                      onClick={addToInstance}
+                      disabled={adding || !pick}
+                    >
+                      {adding ? "Adding." : added ? "Added" : "Add"}
+                    </button>
+                  </>
+                )}
+              </div>
+              {addError && (
+                <div className="error" style={{ marginBottom: 14 }}>
+                  {addError}
+                </div>
+              )}
 
               <div className="section-label">Environment</div>
               <div className="side-row">

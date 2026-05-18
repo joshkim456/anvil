@@ -78,6 +78,17 @@ export interface AppInfo {
   status?: string;
 }
 
+export interface InstanceMod {
+  project_id: string;
+  version_id: string;
+  name: string;
+  path: string;
+  sha1: string;
+  sha512: string;
+  download_url: string;
+  file_size: number;
+}
+
 export interface Instance {
   id: string;
   name: string;
@@ -86,25 +97,108 @@ export interface Instance {
   loader_version: string;
   created: string;
   last_played: string | null;
-  mods: { project_id: string; version_id: string; name: string }[];
+  mods: InstanceMod[];
 }
+
+export interface UpdateInfo {
+  project_id: string;
+  name: string;
+  from: string;
+  to: string;
+}
+
+export interface Keybind {
+  name: string;
+  label: string;
+  key_token: string;
+  key_display: string;
+  conflict: boolean;
+}
+
+export interface KeyGroup {
+  mod_name: string;
+  binds: Keybind[];
+}
+
+export interface KeybindReport {
+  /** False when the instance has no options.txt (never launched). */
+  launched: boolean;
+  groups: KeyGroup[];
+  conflict_count: number;
+}
+
+export interface QuestTask {
+  [k: string]: unknown;
+}
+
+export interface QuestReward {
+  [k: string]: unknown;
+}
+
+/** A custom recipe carried by a quest node (Slice 2 facet). Open bag like
+ *  QuestTask/QuestReward: the curator emits shaped/shapeless/smelting shapes
+ *  and the datapack id is derived server-side, so the UI never types it
+ *  strictly — it only reads `type` and the `result` for display. */
+export interface QuestRecipe {
+  [k: string]: unknown;
+}
+
+/** A provisioned-content facet on a quest node (Slice 3). Open bag like the
+ *  recipe facet: the Rust side owns the tagged-union shape and derives every
+ *  datapack id, so the UI only reads `kind`, `entity` and the token names for
+ *  the "Boss" badge + encounter summary. */
+export interface QuestContent {
+  kind?: string;
+  entity?: string;
+  display_name?: string;
+  token_item?: string;
+  token_name?: string;
+  [k: string]: unknown;
+}
+
+export interface Quest {
+  id: string;
+  title: string;
+  description: string;
+  x: number;
+  y: number;
+  deps: string[];
+  tasks: QuestTask[];
+  rewards: QuestReward[];
+  /** Optional recipe facet; absent on plain quest nodes (serde default). */
+  recipes?: QuestRecipe[];
+  /** Optional content facet (Slice 3 provisioned boss); absent on plain
+   *  quest/recipe nodes (serde default = null). */
+  content?: QuestContent | null;
+}
+
+export interface QuestChapter {
+  id: string;
+  title: string;
+  quests: Quest[];
+}
+
+export interface QuestGraph {
+  title: string;
+  chapters: QuestChapter[];
+}
+
+export interface QuestIssue {
+  kind: string;
+  [k: string]: unknown;
+}
+
+export type ThemePref = "light" | "dark" | "system";
 
 export interface Settings {
   has_anthropic_key: boolean;
   ms_client_id: string | null;
+  theme: ThemePref;
 }
 
 export interface AuthAccount {
   username: string;
   uuid: string;
-}
-
-export interface DeviceCode {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  interval: number;
-  expires_in: number;
 }
 
 export type ChatRole = "user" | "assistant";
@@ -114,21 +208,42 @@ export interface ChatMessage {
   content: string;
 }
 
-/* Tauri tuple enum variants serialize as { "kind": "...", "0": value }.
-   Access the payload via evt["0"]. */
+export type Phase = "curating" | "assembled" | "progression" | "complete";
+
+export interface ChatThread {
+  id: string;
+  /** Set once the curator assembled a pack from this thread. */
+  instance_id: string | null;
+  title: string;
+  created: string;
+  updated: string;
+  /** Pipeline phase; scopes the curator's prompt + tools. */
+  phase: Phase;
+  messages: ChatMessage[];
+}
+
+/* Adjacently tagged on the Rust side: { "kind": "...", "data": payload }.
+   Struct variants carry an object in `data`; newtype variants a scalar. */
 export type CuratorEvent =
-  | { kind: "text"; "0": string }
-  | { kind: "tool"; name: string; status: string }
-  | { kind: "assembled"; instance_id: string; name: string }
+  | { kind: "text"; data: string }
+  | { kind: "tool"; data: { name: string; status: string } }
+  | { kind: "assembled"; data: { instance_id: string; name: string } }
+  | { kind: "phase"; data: string }
   | { kind: "done" }
-  | { kind: "error"; "0": string };
+  | { kind: "error"; data: string };
 
 export type LaunchEvent =
-  | { kind: "status"; "0": string }
-  | { kind: "progress"; done: number; total: number; what: string }
-  | { kind: "log"; "0": string }
-  | { kind: "exited"; "0": number }
-  | { kind: "error"; "0": string };
+  | { kind: "status"; data: string }
+  | { kind: "progress"; data: { done: number; total: number; what: string } }
+  | { kind: "log"; data: string }
+  | { kind: "exited"; data: number }
+  | { kind: "error"; data: string };
+
+/** Tier 3 smoke-test verdict (adjacently tagged on the Rust side). */
+export type SmokeVerdict =
+  | { kind: "ok" }
+  | { kind: "failed"; data: { mod_name: string | null; reason: string } }
+  | { kind: "inconclusive"; data: { reason: string } };
 
 export type AuthEvent =
   | { status: "signed_in"; username: string }
@@ -168,18 +283,71 @@ export const api = {
   listInstances: () => invoke<Instance[]>("list_instances"),
 
   getSettings: () => invoke<Settings>("get_settings"),
-  setSettings: (args: { anthropicApiKey?: string; msClientId?: string }) =>
-    invoke<void>("set_settings", args),
+  setSettings: (args: {
+    anthropicApiKey?: string;
+    msClientId?: string;
+    theme?: ThemePref;
+  }) => invoke<void>("set_settings", args),
 
   authStatus: () => invoke<AuthAccount | null>("auth_status"),
   authSignout: () => invoke<void>("auth_signout"),
-  authStart: () => invoke<DeviceCode>("auth_start"),
+  authStart: () => invoke<void>("auth_start"),
 
-  curatorSend: (history: ChatMessage[], message: string) =>
-    invoke<void>("curator_send", { history, message }),
+  curatorSend: (
+    history: ChatMessage[],
+    message: string,
+    phase: Phase,
+    threadId: string,
+  ) => invoke<void>("curator_send", { history, message, phase, threadId }),
+
+  listChats: () => invoke<ChatThread[]>("list_chats"),
+  getChat: (threadId: string) =>
+    invoke<ChatThread | null>("get_chat", { threadId }),
+  saveChat: (thread: ChatThread) => invoke<void>("save_chat", { thread }),
+  deleteChat: (threadId: string) =>
+    invoke<void>("delete_chat", { threadId }),
+  chatForInstance: (instanceId: string) =>
+    invoke<ChatThread | null>("chat_for_instance", { instanceId }),
 
   launchInstance: (instanceId: string) =>
     invoke<void>("launch_instance", { instanceId }),
+  smokeTestInstance: (instanceId: string) =>
+    invoke<SmokeVerdict>("smoke_test_instance", { instanceId }),
   importMrpack: (path: string) =>
     invoke<Instance>("import_mrpack", { path }),
+
+  createInstance: (args: {
+    name: string;
+    mcVersion: string;
+    loader: string;
+    loaderVersion: string;
+  }) => invoke<Instance>("create_instance", args),
+  deleteInstance: (instanceId: string) =>
+    invoke<void>("delete_instance", { instanceId }),
+  duplicateInstance: (instanceId: string, newName: string) =>
+    invoke<Instance>("duplicate_instance", { instanceId, newName }),
+
+  addModToInstance: (instanceId: string, projectId: string) =>
+    invoke<Instance>("add_mod_to_instance", { instanceId, projectId }),
+  removeModFromInstance: (instanceId: string, projectId: string) =>
+    invoke<Instance>("remove_mod_from_instance", { instanceId, projectId }),
+
+  getKeybinds: (instanceId: string) =>
+    invoke<KeybindReport>("get_keybinds", { instanceId }),
+  setKeybinds: (
+    instanceId: string,
+    changes: { name: string; token: string }[],
+  ) => invoke<void>("set_keybinds", { instanceId, changes }),
+
+  checkInstanceUpdates: (instanceId: string) =>
+    invoke<UpdateInfo[]>("check_instance_updates", { instanceId }),
+  applyInstanceUpdates: (instanceId: string, projectIds: string[]) =>
+    invoke<Instance>("apply_instance_updates", { instanceId, projectIds }),
+
+  getQuestGraph: (instanceId: string) =>
+    invoke<QuestGraph | null>("get_quest_graph", { instanceId }),
+  saveQuestGraph: (instanceId: string, graph: QuestGraph) =>
+    invoke<void>("save_quest_graph", { instanceId, graph }),
+  validateQuestGraph: (instanceId: string, graph: QuestGraph) =>
+    invoke<QuestIssue[]>("validate_quest_graph", { instanceId, graph }),
 };

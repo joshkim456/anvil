@@ -6,6 +6,21 @@
     <title>Anvil</title>
   </head>
   <body>
+    <script>
+      // Set the palette before first paint to avoid a light-then-dark flash.
+      // Reads the cached preference (mirrored from backend Settings by
+      // theme.ts); main.tsx reconciles with the backend once React mounts.
+      (function () {
+        try {
+          var p = localStorage.getItem("anvil-theme") || "system";
+          var dark =
+            p === "dark" ||
+            (p === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (e) {}
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

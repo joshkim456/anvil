@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, ThemePref } from "../lib/api";
+import { applyTheme } from "../lib/theme";
+import { Dropdown, Opt } from "../components/Dropdown";
+
+const THEME_OPTS: Opt[] = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
 
 export default function Settings() {
   const [hasKey, setHasKey] = useState(false);
@@ -9,6 +17,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<ThemePref>("system");
 
   useEffect(() => {
     let alive = true;
@@ -18,6 +27,7 @@ export default function Settings() {
         if (!alive) return;
         setHasKey(s.has_anthropic_key);
         setClientId(s.ms_client_id ?? "");
+        setTheme(s.theme);
       })
       .catch((e) => alive && setError(String(e)))
       .finally(() => alive && setLoading(false));
@@ -48,6 +58,17 @@ export default function Settings() {
     }
   }
 
+  // Theme applies instantly (and persists) — no Save round-trip needed.
+  async function changeTheme(t: ThemePref) {
+    setTheme(t);
+    applyTheme(t);
+    try {
+      await api.setSettings({ theme: t });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <>
       <div className="page-head">
@@ -59,6 +80,18 @@ export default function Settings() {
       ) : (
         <div className="settings-form">
           {error && <div className="error">{error}</div>}
+
+          <div className="field">
+            <span className="field-label">Theme</span>
+            <Dropdown
+              value={theme}
+              options={THEME_OPTS}
+              onChange={(v) => changeTheme(v as ThemePref)}
+            />
+            <span className="field-hint">
+              System follows your OS appearance.
+            </span>
+          </div>
 
           <label className="field">
             <span className="field-label">
@@ -84,8 +117,8 @@ export default function Settings() {
               autoComplete="off"
             />
             <span className="field-hint">
-              Microsoft client ID: register a free Azure app for Minecraft
-              sign-in.
+              Reserved for a future Microsoft-approved sign-in. Current sign-in
+              does not use this field.
             </span>
           </label>
 
