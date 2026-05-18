@@ -1657,7 +1657,7 @@ async fn tool_get_mod(
 
 /// A `{project_id, version_id}` pair as the model passes it in.
 #[derive(Debug, Deserialize, PartialEq)]
-struct ModRef {
+pub(crate) struct ModRef {
     project_id: String,
     version_id: String,
 }
@@ -2069,7 +2069,7 @@ async fn resolve_pack(
 /// Outcome of a successful `edit_instance_mods`. The diff is computed against
 /// the instance's prior closure so the caller can report exactly what changed.
 #[derive(Debug)]
-struct EditResult {
+pub(crate) struct EditResult {
     /// The new resolved closure (raw resolver output). The caller maps this to
     /// `PinnedMod` for `Instance.mods` and feeds it to `write_mrpack` — same
     /// as `assemble_pack`, so persistence + serialization stay in one place.
@@ -2091,7 +2091,7 @@ struct EditResult {
 
 /// One refused removal: still required by other kept mods.
 #[derive(Debug)]
-struct StillRequired {
+pub(crate) struct StillRequired {
     pub label: String,
     /// Kept mods whose real jar manifests still require it. Empty when jar
     /// metadata could not attribute it to a specific mod.
@@ -2099,7 +2099,7 @@ struct StillRequired {
 }
 
 #[derive(Debug)]
-enum EditError {
+pub(crate) enum EditError {
     /// One or more removals cannot be honored — still required by kept mods.
     StillRequired(Vec<StillRequired>),
     /// The resolved set has blocking issues (an add introduced an
@@ -2119,7 +2119,7 @@ enum EditError {
 ///   requires it, so the removal is refused with that requiring set.
 /// - **Orphans auto-prune** — a dep that only existed because a removed mod
 ///   needed it is simply not re-added, and is reported.
-async fn edit_instance_mods(
+pub(crate) async fn edit_instance_mods(
     mr: &Modrinth,
     inst: &Instance,
     add: &[ModRef],
@@ -3044,7 +3044,7 @@ async fn tool_validate_pack(
 /// GATE: skip only when the cache is already a `DumpReconciled` match for the
 /// CURRENT pins (re-dumping that is wasted work). `edit_pack` deletes the
 /// cache first, so after an edit this always runs.
-fn spawn_registry_dump_detached(
+pub(crate) fn spawn_registry_dump_detached(
     id: String,
     inst: Instance,
     mr: Modrinth, // `Modrinth: Clone`; a borrow cannot cross the spawn
@@ -3534,7 +3534,7 @@ async fn tool_generate_origins(
 /// source of truth) and launch re-materializes from cache, so a filename
 /// reconcile here is safe and self-healing (also clears a version-bumped mod's
 /// stale old jar).
-fn apply_edit_writes(
+pub(crate) fn apply_edit_writes(
     dir: &std::path::Path,
     base: &Instance,
     result: &EditResult,
@@ -3786,6 +3786,118 @@ async fn tool_edit_pack(
             parts.join("; ")
         }
     ))
+}
+
+// ---------------------------------------------------------------------------
+// UI-facing safe edit. `tool_edit_pack` is the agent path (recoverable strings
+// the run_turn loop repairs); the Instances screen's add/remove "X" needs the
+// SAME safe core but with a STRUCTURED error the frontend can branch on. This
+// is that adapter: identical success-path order to `tool_edit_pack`, with the
+// `EditError` mapped to a serde-tagged `ApplyEditError` (the cross-team JSON
+// contract the parallel frontend is built against — do not change the shape).
+// ---------------------------------------------------------------------------
+
+/// One refused removal, view-modelled for the frontend. Mirror of the internal
+/// `StillRequired` (kept separate so the wire shape is owned by this contract,
+/// not by an internal type's incidental layout).
+#[derive(Debug, Serialize)]
+pub(crate) struct StillRequiredView {
+    pub label: String,
+    pub required_by: Vec<String>,
+}
+
+/// Structured failure for the UI add/remove commands. Internally-tagged on
+/// `kind` (snake_case) — Tauri requires `Err: Serialize`; the frontend matches
+/// on `kind`. EXACT shapes (locked cross-team contract):
+/// - `{"kind":"still_required","items":[{"label":"..","required_by":[".."]}]}`
+/// - `{"kind":"conflicts","issues":[<ValidationIssue>...]}`
+/// - `{"kind":"resolve","message":".."}`
+/// - `{"kind":"not_found","instance_id":".."}`
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ApplyEditError {
+    /// A requested removal is still required by other kept mods.
+    StillRequired { items: Vec<StillRequiredView> },
+    /// The resolved set has blocking conflicts (bad add / unresolved dep).
+    Conflicts { issues: Vec<pack::ValidationIssue> },
+    /// Resolution / write / save failed (transient or I/O).
+    Resolve { message: String },
+    /// No instance with this id.
+    NotFound { instance_id: String },
+}
+
+/// UI-facing safe pack edit: same safe core + same on-disk write order as
+/// `tool_edit_pack`, returning the updated `Instance` or a structured
+/// `ApplyEditError`. `add` is `[(project_id, version_id?)]`: a `None`
+/// `version_id` lets the resolver pick the best compatible build (an empty
+/// `version_id` string is the in-core "auto-pick" sentinel — same as the
+/// agent path). The naive lib.rs append/retain commands are the exact bug
+/// class this routes around: add is dependency-complete + conflict-gated,
+/// remove is reverse-dependency safe + prunes the on-disk jar.
+pub(crate) async fn apply_pack_edit(
+    mr: &Modrinth,
+    instance_id: &str,
+    add: &[(String, Option<String>)],
+    remove: &[String],
+) -> Result<Instance, ApplyEditError> {
+    let Some(inst) =
+        load_instances().into_iter().find(|i| i.id == instance_id)
+    else {
+        return Err(ApplyEditError::NotFound {
+            instance_id: instance_id.to_string(),
+        });
+    };
+
+    let add_refs: Vec<ModRef> = add
+        .iter()
+        .map(|(pid, vid)| ModRef {
+            project_id: pid.clone(),
+            version_id: vid.clone().unwrap_or_default(),
+        })
+        .collect();
+
+    let result = match edit_instance_mods(mr, &inst, &add_refs, remove).await {
+        Ok(r) => r,
+        Err(EditError::StillRequired(v)) => {
+            return Err(ApplyEditError::StillRequired {
+                items: v
+                    .into_iter()
+                    .map(|s| StillRequiredView {
+                        label: s.label,
+                        required_by: s.required_by,
+                    })
+                    .collect(),
+            });
+        }
+        Err(EditError::Conflicts(issues)) => {
+            return Err(ApplyEditError::Conflicts { issues });
+        }
+        Err(EditError::Resolve(message)) => {
+            return Err(ApplyEditError::Resolve { message });
+        }
+    };
+
+    // noop: the resolved closure + roots are unchanged. Nothing to write,
+    // no registry re-dump — return the instance as-is.
+    if result.noop {
+        return Ok(inst);
+    }
+
+    // Same fixed order as `tool_edit_pack`'s success path: dir-scoped writes
+    // (jar prune + grounding-cache invalidation + .mrpack rewrite) → persist
+    // the instance → detached grounding re-dump for the new pin set.
+    let dir = instance_dir(instance_id);
+    let updated = apply_edit_writes(&dir, &inst, &result)
+        .map_err(|e| ApplyEditError::Resolve { message: e.to_string() })?;
+    save_instance(&updated)
+        .map_err(|e| ApplyEditError::Resolve { message: e.to_string() })?;
+    spawn_registry_dump_detached(
+        instance_id.to_string(),
+        updated.clone(),
+        mr.clone(),
+    );
+
+    Ok(updated)
 }
 
 async fn tool_generate_quests(
@@ -5534,5 +5646,170 @@ mod edit_pack_real_data_tests {
         assert_eq!(updated.mods.len(), 1);
         assert_eq!(updated.mods[0].project_id, "K");
         assert_eq!(updated.roots, vec!["K".to_string()]);
+    }
+
+    /// End-to-end of the UI add/remove route the new lib.rs commands take,
+    /// minus the global-dir `load_instances`/`save_instance` (untestable
+    /// offline): the SAME pieces `apply_pack_edit` chains —
+    /// `edit_instance_mods_with_state` (real resolver + gates, no network) →
+    /// `apply_edit_writes` (real on-disk prune + .mrpack) under a tempdir.
+    ///
+    /// ADD: a mod whose REAL Modrinth edge requires a dep ⇒ the updated
+    /// Instance.mods CONTAINS the added project AND its pulled dep, both jars
+    /// land, .mrpack exists. REMOVE the added root ⇒ it is gone from
+    /// Instance.mods, the dep auto-prunes as an orphan, and BOTH stale jars
+    /// are deleted off disk (seeded fakes prove the prune, not just absence).
+    /// This is the "the mod actually gets added/removed" guarantee the naive
+    /// append/retain commands did not provide.
+    #[tokio::test]
+    async fn ui_route_add_then_remove_adds_and_prunes_on_disk() {
+        let td = tempfile::tempdir().unwrap();
+        let dir = td.path();
+        std::fs::create_dir_all(dir.join("mods")).unwrap();
+
+        // Start: instance has only A. NEW requires DEP (a real required edge).
+        let inst = instance(&["A"], &[("A", "a1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("NEW", ver("NEW", "n1", "1.20.1", &["DEP"])),
+            ("DEP", ver("DEP", "d1", "1.20.1", &[])),
+        ];
+
+        // --- ADD NEW (auto-pick version, like version_id: None) -----------
+        let add_res = run(&inst, &add1("NEW"), &[], &pv, Default::default())
+            .await
+            .expect("add resolves");
+        assert!(!add_res.noop, "add changed the closure");
+        let after_add =
+            apply_edit_writes(dir, &inst, &add_res).expect("add writes ok");
+
+        let add_pids: std::collections::HashSet<&str> = after_add
+            .mods
+            .iter()
+            .map(|m| m.project_id.as_str())
+            .collect();
+        assert!(
+            add_pids.contains("NEW"),
+            "added project is in Instance.mods, got {add_pids:?}"
+        );
+        assert!(
+            add_pids.contains("DEP"),
+            "required dep pulled into Instance.mods, got {add_pids:?}"
+        );
+        assert!(add_pids.contains("A"), "existing mod retained");
+        assert!(after_add.roots.contains(&"NEW".to_string()));
+        assert!(
+            !after_add.roots.contains(&"DEP".to_string()),
+            "a pulled dep is NOT a root"
+        );
+        assert!(
+            dir.join(format!("{}.mrpack", after_add.name)).exists(),
+            ".mrpack written on add"
+        );
+
+        // --- REMOVE NEW: DEP should auto-prune as an orphan ---------------
+        // Seed BOTH jars so the prune (not mere absence) is what we observe.
+        std::fs::write(dir.join("mods/NEW.jar"), b"x").unwrap();
+        std::fs::write(dir.join("mods/DEP.jar"), b"x").unwrap();
+        std::fs::write(dir.join("mods/A.jar"), b"x").unwrap();
+        assert!(dir.join("mods/NEW.jar").exists());
+        assert!(dir.join("mods/DEP.jar").exists());
+
+        let rm_res = run(
+            &after_add,
+            &[],
+            &["NEW".into()],
+            &pv,
+            Default::default(),
+        )
+        .await
+        .expect("remove resolves");
+        assert!(!rm_res.noop, "remove changed the closure");
+        assert!(
+            rm_res.removed.contains(&"NEW".to_string()),
+            "NEW recorded as removed"
+        );
+        assert!(
+            rm_res.pruned_orphans.contains(&"DEP".to_string()),
+            "DEP auto-pruned as orphan, got {:?}",
+            rm_res.pruned_orphans
+        );
+        let after_rm =
+            apply_edit_writes(dir, &after_add, &rm_res).expect("rm writes ok");
+
+        let rm_pids: std::collections::HashSet<&str> = after_rm
+            .mods
+            .iter()
+            .map(|m| m.project_id.as_str())
+            .collect();
+        assert!(
+            !rm_pids.contains("NEW"),
+            "removed project gone from Instance.mods"
+        );
+        assert!(
+            !rm_pids.contains("DEP"),
+            "orphaned dep gone from Instance.mods"
+        );
+        assert!(rm_pids.contains("A"), "untouched mod survives");
+        assert!(
+            !dir.join("mods/NEW.jar").exists(),
+            "removed mod's jar pruned off disk"
+        );
+        assert!(
+            !dir.join("mods/DEP.jar").exists(),
+            "orphaned dep's jar pruned off disk"
+        );
+        assert!(
+            dir.join("mods/A.jar").exists(),
+            "kept mod's jar untouched"
+        );
+    }
+
+    /// Lock the cross-team JSON wire shape of `ApplyEditError`. The frontend
+    /// is built in parallel against EXACTLY these strings — a serde-attr drift
+    /// (tag rename, casing, struct-variant flattening) must fail here, not in
+    /// production. Covers every variant.
+    #[test]
+    fn apply_edit_error_serde_shape_is_locked() {
+        let still = ApplyEditError::StillRequired {
+            items: vec![StillRequiredView {
+                label: "sodium".into(),
+                required_by: vec!["iris".into()],
+            }],
+        };
+        assert_eq!(
+            serde_json::to_string(&still).unwrap(),
+            r#"{"kind":"still_required","items":[{"label":"sodium","required_by":["iris"]}]}"#
+        );
+
+        let resolve = ApplyEditError::Resolve {
+            message: "modrinth down".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&resolve).unwrap(),
+            r#"{"kind":"resolve","message":"modrinth down"}"#
+        );
+
+        let nf = ApplyEditError::NotFound {
+            instance_id: "inst-1".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&nf).unwrap(),
+            r#"{"kind":"not_found","instance_id":"inst-1"}"#
+        );
+
+        // Conflicts: outer shape locked; inner is pack::ValidationIssue's own
+        // (already serde-tested in pack.rs). Just assert the envelope.
+        let conf = ApplyEditError::Conflicts {
+            issues: vec![pack::ValidationIssue::IncompatibleGameVersion {
+                project_id: "p".into(),
+                want: "1.20.1".into(),
+            }],
+        };
+        let s = serde_json::to_string(&conf).unwrap();
+        assert!(
+            s.starts_with(r#"{"kind":"conflicts","issues":["#),
+            "conflicts envelope shape, got {s}"
+        );
     }
 }

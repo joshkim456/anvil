@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { api, Instance, ModDetail as Detail } from "../lib/api";
+import { api, Instance, ModDetail as Detail, formatEditError } from "../lib/api";
 import { Dropdown, Opt } from "./Dropdown";
 
 /** Modrinth-style mod detail: description + versions table on the left,
@@ -22,6 +22,9 @@ export default function ModDetail({
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  // null = Auto (backend picks the best compatible version). Non-null
+  // pins a specific version id. Default Auto keeps adding one click.
+  const [selectedVer, setSelectedVer] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -55,11 +58,11 @@ export default function ModDetail({
     setAdding(true);
     setAddError(null);
     try {
-      await api.addModToInstance(pick, p.id);
+      await api.addModToInstance(pick, p.id, selectedVer ?? undefined);
       setAdded(true);
       setTimeout(() => setAdded(false), 2000);
     } catch (e) {
-      setAddError(String(e));
+      setAddError(formatEditError(e));
     } finally {
       setAdding(false);
     }
@@ -140,12 +143,26 @@ export default function ModDetail({
                 dangerouslySetInnerHTML={{ __html: bodyHtml }}
               />
 
-              <div className="section-label">
-                Versions ({data.versions.length})
+              <div className="section-label versions-label">
+                <span>Versions ({data.versions.length})</span>
+                <span className="versions-pick">
+                  {selectedVer ? (
+                    <button
+                      type="button"
+                      className="ver-clear"
+                      onClick={() => setSelectedVer(null)}
+                    >
+                      Using selected · reset to Auto
+                    </button>
+                  ) : (
+                    <span className="ver-auto">Auto (newest compatible)</span>
+                  )}
+                </span>
               </div>
-              <table className="versions">
+              <table className="versions selectable">
                 <thead>
                   <tr>
+                    <th aria-label="Selected"></th>
                     <th>Version</th>
                     <th>Channel</th>
                     <th>MC</th>
@@ -154,15 +171,30 @@ export default function ModDetail({
                   </tr>
                 </thead>
                 <tbody>
-                  {data.versions.slice(0, 12).map((v) => (
-                    <tr key={v.id}>
-                      <td>{v.version_number}</td>
-                      <td>{v.version_type}</td>
-                      <td>{v.game_versions.slice(0, 3).join(", ")}</td>
-                      <td>{v.loaders.join(", ")}</td>
-                      <td>{v.date_published.slice(0, 10)}</td>
-                    </tr>
-                  ))}
+                  {data.versions.slice(0, 12).map((v) => {
+                    const sel = selectedVer === v.id;
+                    return (
+                      <tr
+                        key={v.id}
+                        className={sel ? "sel" : ""}
+                        onClick={() =>
+                          setSelectedVer(sel ? null : v.id)
+                        }
+                        title={
+                          sel
+                            ? "Selected — click to use Auto instead"
+                            : "Click to pin this version"
+                        }
+                      >
+                        <td className="ver-check">{sel ? "✓" : ""}</td>
+                        <td>{v.version_number}</td>
+                        <td>{v.version_type}</td>
+                        <td>{v.game_versions.slice(0, 3).join(", ")}</td>
+                        <td>{v.loaders.join(", ")}</td>
+                        <td>{v.date_published.slice(0, 10)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -189,7 +221,10 @@ export default function ModDetail({
                 )}
               </div>
               {addError && (
-                <div className="error" style={{ marginBottom: 14 }}>
+                <div
+                  className="error"
+                  style={{ marginBottom: 14, whiteSpace: "pre-line" }}
+                >
                   {addError}
                 </div>
               )}

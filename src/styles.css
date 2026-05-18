@@ -1293,6 +1293,65 @@ a {
   background: var(--slot);
 }
 
+/* Optional per-version picker (Browse → ModDetail). Default is Auto;
+   clicking a row pins that version, clicking it again returns to Auto. */
+.versions.selectable tbody tr {
+  cursor: pointer;
+}
+
+.versions.selectable tbody tr.sel td {
+  background: var(--accent-tint);
+  color: var(--accent-press);
+}
+
+.versions.selectable tbody tr.sel td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.versions .ver-check {
+  width: 18px;
+  color: var(--accent);
+  font-weight: 700;
+  text-align: center;
+}
+
+.versions-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.versions-pick {
+  font-size: 11px;
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+
+.ver-auto {
+  color: var(--muted);
+}
+
+.ver-clear {
+  border: 1.5px solid var(--accent-edge);
+  background: var(--accent-tint);
+  color: var(--accent-press);
+  border-radius: var(--r-sm);
+  padding: 3px 9px;
+  font-size: 11px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition:
+    border-color 0.14s,
+    color 0.14s;
+}
+
+.ver-clear:hover {
+  border-color: var(--accent);
+}
+
 .side-row {
   display: flex;
   justify-content: space-between;

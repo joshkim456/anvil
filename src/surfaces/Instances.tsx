@@ -7,6 +7,7 @@ import {
   KeybindReport,
   LaunchEvent,
   UpdateInfo,
+  formatEditError,
   on,
 } from "../lib/api";
 import { Dropdown, Opt } from "../components/Dropdown";
@@ -286,11 +287,15 @@ export default function Instances({
   }
 
   async function removeMod(instanceId: string, projectId: string) {
+    setImportError(null);
     try {
       await api.removeModFromInstance(instanceId, projectId);
       refreshInstances();
     } catch (e) {
-      setImportError(String(e));
+      // Structured rejection (e.g. still_required lists the mods that
+      // still depend on this one); never String(e) — that prints
+      // "[object Object]" and hides the path forward.
+      setImportError(formatEditError(e));
     }
   }
 
@@ -440,7 +445,11 @@ export default function Instances({
           {importBusy ? "Importing." : "Import .mrpack"}
         </button>
       </div>
-      {importError && <div className="error">{importError}</div>}
+      {importError && (
+        <div className="error" style={{ whiteSpace: "pre-line" }}>
+          {importError}
+        </div>
+      )}
 
       {instances.length === 0 ? (
         <div className="placeholder">

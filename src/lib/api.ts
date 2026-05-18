@@ -277,6 +277,51 @@ export type AuthEvent =
   | { status: "signed_in"; username: string }
   | { error: string };
 
+/** Rejection value (Tauri-serialized `Err`) from add/remove mod commands.
+ *  A caught error from `invoke` may be one of these objects OR a plain
+ *  string (older / unexpected path) — always run it through
+ *  `formatEditError` before showing it. */
+export type ApplyEditError =
+  | { kind: "still_required"; items: { label: string; required_by: string[] }[] }
+  | { kind: "conflicts"; issues: unknown[] }
+  | { kind: "resolve"; message: string }
+  | { kind: "not_found"; instance_id: string };
+
+/** Turn an add/remove rejection (structured `ApplyEditError`, a plain
+ *  string, or anything unexpected) into a single user-facing message.
+ *  For `still_required` every blocked item is listed on its own line with
+ *  the mods that still depend on it, so the user has a clear path forward
+ *  (remove those too). Multi-line output relies on the renderer using
+ *  `white-space: pre-line` (or `<br>`). */
+export function formatEditError(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "kind" in e) {
+    const err = e as ApplyEditError;
+    switch (err.kind) {
+      case "still_required":
+        return err.items
+          .map((it) => {
+            const by = it.required_by.join(", ");
+            return by
+              ? `${it.label} is still required by ${by} — remove those too to remove it.`
+              : `${it.label} is still required by other mods — remove those too to remove it.`;
+          })
+          .join("\n");
+      case "conflicts": {
+        const n = Array.isArray(err.issues) ? err.issues.length : 0;
+        return n > 0
+          ? `Could not apply — ${n} dependency conflict${n === 1 ? "" : "s"} detected. Try a different version or remove the conflicting mod.`
+          : "Could not apply — dependency conflicts detected. Try a different version or remove the conflicting mod.";
+      }
+      case "resolve":
+        return err.message;
+      case "not_found":
+        return "Instance not found — it may have been deleted. Reopen it and try again.";
+    }
+  }
+  return String(e);
+}
+
 /** Thin typed wrapper over Tauri's event listen. Returns the promise of an
     unlisten fn so callers can clean up in a useEffect teardown. */
 export function on<T>(
@@ -355,8 +400,12 @@ export const api = {
   duplicateInstance: (instanceId: string, newName: string) =>
     invoke<Instance>("duplicate_instance", { instanceId, newName }),
 
-  addModToInstance: (instanceId: string, projectId: string) =>
-    invoke<Instance>("add_mod_to_instance", { instanceId, projectId }),
+  addModToInstance: (
+    instanceId: string,
+    projectId: string,
+    versionId?: string,
+  ) =>
+    invoke<Instance>("add_mod_to_instance", { instanceId, projectId, versionId }),
   removeModFromInstance: (instanceId: string, projectId: string) =>
     invoke<Instance>("remove_mod_from_instance", { instanceId, projectId }),
 

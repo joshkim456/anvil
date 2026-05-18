@@ -628,34 +628,38 @@ fn duplicate_instance(
     Ok(inst)
 }
 
+/// Add one mod to an instance via the safe curator core (dependency-complete,
+/// conflict-gated, .mrpack + grounding cache kept consistent). `version_id`
+/// `None` ⇒ the resolver picks the best compatible build; `Some` pins exactly
+/// what the Browse version picker chose. Thin wrapper over
+/// `curator::apply_pack_edit` — the naive append this replaces was the bug.
 #[tauri::command]
 async fn add_mod_to_instance(
     state: tauri::State<'_, Modrinth>,
     instance_id: String,
     project_id: String,
-) -> Result<Instance, String> {
-    let mut inst =
-        find_instance(&instance_id).ok_or_else(|| "instance not found".to_string())?;
-    if inst.mods.iter().any(|m| m.project_id == project_id) {
-        return Ok(inst);
-    }
-    let pinned =
-        resolve_pinned(&state, &project_id, &inst.mc_version, &inst.loader).await?;
-    inst.mods.push(pinned);
-    instance::save_instance(&inst).map_err(|e| e.to_string())?;
-    Ok(inst)
+    version_id: Option<String>,
+) -> Result<Instance, curator::ApplyEditError> {
+    curator::apply_pack_edit(
+        &state,
+        &instance_id,
+        &[(project_id, version_id)],
+        &[],
+    )
+    .await
 }
 
+/// Remove one mod from an instance via the safe curator core: re-resolves to
+/// honour reverse-deps (refuses if still required) and prunes the now-orphaned
+/// jar off disk — the retain-only version this replaces left jars behind and
+/// could strip a dep another mod needed.
 #[tauri::command]
-fn remove_mod_from_instance(
+async fn remove_mod_from_instance(
+    state: tauri::State<'_, Modrinth>,
     instance_id: String,
     project_id: String,
-) -> Result<Instance, String> {
-    let mut inst =
-        find_instance(&instance_id).ok_or_else(|| "instance not found".to_string())?;
-    inst.mods.retain(|m| m.project_id != project_id);
-    instance::save_instance(&inst).map_err(|e| e.to_string())?;
-    Ok(inst)
+) -> Result<Instance, curator::ApplyEditError> {
+    curator::apply_pack_edit(&state, &instance_id, &[], &[project_id]).await
 }
 
 #[derive(Serialize)]
