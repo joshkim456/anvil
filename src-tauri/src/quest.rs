@@ -1510,15 +1510,44 @@ fn task_to_json(task: &QuestTask) -> serde_json::Value {
 /// edges shape a chapter — cross-chapter prerequisites are positioned by the
 /// `to_heracles_json` incoming-gutter pass and are intentionally ignored here.
 pub fn layout_graph(g: &mut QuestGraph) {
-    for ch in &mut g.chapters {
-        layout_chapter(&mut ch.quests);
+    // Quest id -> its home chapter index, so we can tell which chapters will
+    // RECEIVE cross-chapter prerequisites. `to_heracles_json` injects every
+    // such foreign prereq into the dependent's group at `native_min_x - 2`
+    // (the incoming gutter), which drags that group's Heracles camera centroid
+    // left. A chapter that receives ≥1 foreign prereq therefore needs its
+    // backbone fold biased right to keep the root on the centroid.
+    let mut home: HashMap<&str, usize> = HashMap::new();
+    for (ci, ch) in g.chapters.iter().enumerate() {
+        for q in &ch.quests {
+            home.insert(q.id.as_str(), ci);
+        }
+    }
+    let receives_foreign: Vec<bool> = g
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(ci, ch)| {
+            ch.quests.iter().any(|q| {
+                q.deps.iter().any(|d| {
+                    home.get(d.as_str()).is_some_and(|&dc| dc != ci)
+                })
+            })
+        })
+        .collect();
+    // `home` borrows g immutably; drop it before the mutable layout pass.
+    drop(home);
+    for (ci, ch) in g.chapters.iter_mut().enumerate() {
+        let gutter_pad = if receives_foreign[ci] { 2 } else { 0 };
+        layout_chapter(&mut ch.quests, gutter_pad);
     }
 }
 
-/// Lay out one chapter's quests in place (see [`layout_graph`]).
-fn layout_chapter(quests: &mut [QuestNode]) {
-    let n = quests.len();
-    if n == 0 {
+/// Lay out one chapter's quests in place (see [`layout_graph`]). `gutter_pad`
+/// is the extra left extent `to_heracles_json` will add for incoming
+/// cross-chapter prerequisites (0 or 2); the backbone fold is biased right by
+/// it so the primary root stays on Heracles' bbox-centroid camera target.
+fn layout_chapter(quests: &mut [QuestNode], gutter_pad: i64) {
+    if quests.is_empty() {
         return;
     }
 
@@ -1642,180 +1671,185 @@ fn layout_chapter(quests: &mut [QuestNode]) {
             }
         }
     }
-    let subtree_size = |root: &str| -> usize { closure(root) };
-
-    // Descend the forced spine (single spanning-child links, no other roots)
-    // to the first BRANCH node; that is where we split left/right.
-    let other_roots: Vec<&str> =
-        roots.iter().copied().filter(|&r| r != primary).collect();
-    let mut spine: Vec<&str> = vec![primary];
-    let mut pivot = primary;
-    if other_roots.is_empty() {
-        loop {
-            let kids = tree_kids.get(pivot).map(|v| v.as_slice()).unwrap_or(&[]);
-            if kids.len() == 1 {
-                let only = kids[0];
-                spine.push(only);
-                pivot = only;
-            } else {
-                break;
+    // Longest dependency path from the primary root (the BACKBONE). Real
+    // chapters concentrate their depth in one chain with small offshoots, so
+    // whole-subtree bipartition cannot balance them — the backbone itself must
+    // be folded. depth(n)=0 at leaves else 1+max(child depth); the path
+    // follows the deepest child (lex-min id on ties). Deterministic.
+    let mut depth: HashMap<&str, i64> = HashMap::new();
+    {
+        let mut order: Vec<&str> = Vec::new();
+        let mut st = vec![primary];
+        let mut seen: HashSet<&str> = HashSet::new();
+        while let Some(u) = st.pop() {
+            if !seen.insert(u) {
+                continue;
+            }
+            order.push(u);
+            if let Some(cs) = tree_kids.get(u) {
+                for &c in cs {
+                    st.push(c);
+                }
             }
         }
+        for &u in order.iter().rev() {
+            let d = tree_kids
+                .get(u)
+                .map(|cs| {
+                    cs.iter()
+                        .map(|c| depth.get(c).copied().unwrap_or(0))
+                        .max()
+                        .map(|m| m + 1)
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+            depth.insert(u, d);
+        }
     }
+    let mut path: Vec<&str> = vec![primary];
+    {
+        let mut cur = primary;
+        while let Some(cs) = tree_kids.get(cur) {
+            if cs.is_empty() {
+                break;
+            }
+            let nxt = *cs
+                .iter()
+                .max_by(|a, b| {
+                    let da = depth.get(**a).copied().unwrap_or(0);
+                    let db = depth.get(**b).copied().unwrap_or(0);
+                    da.cmp(&db).then_with(|| b.cmp(a))
+                })
+                .unwrap();
+            path.push(nxt);
+            cur = nxt;
+        }
+    }
+    let on_path: HashSet<&str> = path.iter().copied().collect();
 
     let mut x: HashMap<&str, f64> = HashMap::new();
     let mut y: HashMap<&str, f64> = HashMap::new();
 
-    // Distribution set: the pivot's spanning children + every other root.
-    let mut dist: Vec<&str> = tree_kids
-        .get(pivot)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .chain(other_roots.iter().copied())
-        .collect();
-    dist.sort_unstable();
+    // FOLD the backbone around the root so root.x == bbox x-centroid: the
+    // first `h` nodes go right (x=0..h), the rest fold back left
+    // (x=-1,-2,…). `h` is biased right by `gutter_pad` so the incoming-gutter
+    // column (`native_min_x − 2`) does not pull the centroid off the root.
+    // One reentrant arrow at the U-turn (accepted; Heracles draws arrows in
+    // either direction — the mirrored reading is the price of the start
+    // quest being the on-open camera focus).
+    let l = path.len() as i64 - 1;
+    let h = (((l + gutter_pad) + 1) / 2).clamp(0, l);
+    for (i, &id) in path.iter().enumerate() {
+        let i = i as i64;
+        let xv = if i <= h { i } else { -(i - h) };
+        x.insert(id, xv as f64);
+    }
+    let min_x = -(l - h);
+    let max_x = h;
 
-    if dist.is_empty() {
-        // PURE CHAIN: no branch anywhere. Lay the whole path on the x=0 axis
-        // and route half DOWN / half UP from the root so the root is the
-        // y-centroid (one reentrant arrow at the U-turn — accepted).
-        let path = spine; // primary .. pivot, in order
-        let k = path.len() as i64 - 1; // last index
-        let h = (k + 1) / 2; // down-arm length
-        for (i, &id) in path.iter().enumerate() {
-            let i = i as i64;
-            x.insert(id, 0.0);
-            let yy = if i == 0 {
-                0
-            } else if i <= h {
-                -i
-            } else {
-                i - h
-            };
-            y.insert(id, yy as f64);
-        }
-    } else {
-        // BIDIRECTIONAL SPLIT. Balance the two arms by DEPTH (Heracles'
-        // centroid uses only min/max, so equal max-extent — not equal node
-        // count — is what centers the root). Deepest subtree to the
-        // currently-shallower side; ties lex by subtree root id.
-        let max_rank_in = |root: &str| -> i64 {
-            let mut best = rank.get(root).copied().unwrap_or(0);
-            let mut stack = vec![root];
-            let mut seen: HashSet<&str> = HashSet::new();
-            seen.insert(root);
-            while let Some(u) = stack.pop() {
-                best = best.max(rank.get(u).copied().unwrap_or(0));
-                if let Some(cs) = tree_kids.get(u) {
-                    for &c in cs {
-                        if seen.insert(c) {
-                            stack.push(c);
-                        }
-                    }
-                }
-            }
-            best
-        };
-        let mut order = dist.clone();
-        order.sort_by(|a, b| {
-            max_rank_in(b)
-                .cmp(&max_rank_in(a))
-                .then_with(|| subtree_size(b).cmp(&subtree_size(a)))
-                .then_with(|| a.cmp(b))
-        });
+    // Off-path nodes extend in the SAME direction as their already-placed
+    // spanning parent, CLAMPED to the fold extent so the backbone alone fixes
+    // minX/maxX (and therefore the x-centroid stays exactly on the root).
+    {
         let (mut load_l, mut load_r) = (0i64, 0i64);
-        // side: -1 => -x arm, +1 => +x arm.
-        let mut side: HashMap<&str, i64> = HashMap::new();
-        for &sub in &order {
-            let depth = max_rank_in(sub);
-            let s = if load_l <= load_r { -1 } else { 1 };
-            if s < 0 {
-                load_l = load_l.max(depth);
-            } else {
-                load_r = load_r.max(depth);
-            }
-            // Whole spanning subtree inherits the arm.
-            let mut stack = vec![sub];
-            let mut seen: HashSet<&str> = HashSet::new();
-            seen.insert(sub);
-            while let Some(u) = stack.pop() {
-                side.insert(u, s);
-                if let Some(cs) = tree_kids.get(u) {
-                    for &c in cs {
-                        if seen.insert(c) {
-                            stack.push(c);
-                        }
+        let mut q = std::collections::VecDeque::new();
+        for &p in &path {
+            q.push_back(p);
+        }
+        let mut seen: HashSet<&str> = on_path.clone();
+        while let Some(u) = q.pop_front() {
+            if let Some(cs) = tree_kids.get(u) {
+                for &c in cs {
+                    if !seen.insert(c) {
+                        continue;
                     }
+                    if on_path.contains(c) {
+                        q.push_back(c);
+                        continue;
+                    }
+                    let ux = *x.get(u).unwrap_or(&0.0);
+                    let dir = if ux > 0.0 {
+                        1
+                    } else if ux < 0.0 {
+                        -1
+                    } else if load_l <= load_r {
+                        -1
+                    } else {
+                        1
+                    };
+                    if dir < 0 {
+                        load_l += 1;
+                    } else {
+                        load_r += 1;
+                    }
+                    let nx = (ux as i64 + dir).clamp(min_x, max_x);
+                    x.insert(c, nx as f64);
+                    q.push_back(c);
                 }
             }
         }
-        // Spine + pivot live on the x=0 axis.
-        for &s in &spine {
-            x.insert(s, 0.0);
-        }
-        x.insert(pivot, 0.0);
-        // Anything still unsided (DAG cross-edges, cycle nodes): inherit a
-        // sided intra-parent if any (lex-first), else the lighter global arm.
+    }
+    // Other roots / unreachable / cycle nodes: inherit a placed intra-parent's
+    // column (lex-first dep), iterating to a fixed point; never widen x.
+    {
         let mut rest: Vec<&str> = ids
             .iter()
             .copied()
-            .filter(|id| !x.contains_key(id) && !side.contains_key(id))
+            .filter(|id| !x.contains_key(id))
             .collect();
         rest.sort_unstable();
-        for id in rest {
-            let parent_side = quests
-                .iter()
-                .find(|q| q.id == id)
-                .map(|q| {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &id in &rest {
+                if x.contains_key(id) {
+                    continue;
+                }
+                let pc = quests.iter().find(|q| q.id == id).and_then(|q| {
                     let mut ps: Vec<i64> = q
                         .deps
                         .iter()
-                        .filter_map(|d| side.get(d.as_str()).copied())
+                        .filter_map(|d| x.get(d.as_str()).map(|v| *v as i64))
                         .collect();
                     ps.sort_unstable();
                     ps.first().copied()
-                })
-                .flatten();
-            let s = parent_side.unwrap_or(if load_l <= load_r { -1 } else { 1 });
-            side.insert(id, s);
-        }
-        // x = arm-sign * rank for sided nodes (axis nodes already x=0).
-        for &id in &ids {
-            if x.contains_key(id) {
-                continue;
+                });
+                if let Some(px) = pc {
+                    x.insert(id, px.clamp(min_x, max_x) as f64);
+                    changed = true;
+                }
             }
-            let s = side.get(id).copied().unwrap_or(-1);
-            x.insert(id, (s * rank.get(id).copied().unwrap_or(0)) as f64);
         }
+        for &id in &rest {
+            x.entry(id).or_insert(0.0);
+        }
+    }
 
-        // Vertical pass: center every column on 0; force the primary root to
-        // its (x=0) column's MIDPOINT so primary.y ≈ centroidY regardless of
-        // spine length.
-        let mut cols: std::collections::BTreeMap<i64, Vec<&str>> =
-            std::collections::BTreeMap::new();
-        for &id in &ids {
-            let xv = *x.get(id).unwrap() as i64;
-            cols.entry(xv).or_default().push(id);
+    // Vertical pass: center every column on 0 (=> y-centroid 0 = root.y) and
+    // re-seat the primary root at its column's exact midpoint so root.y is
+    // within ½ of the y-centroid regardless of how tall the column is.
+    let mut cols: std::collections::BTreeMap<i64, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for &id in &ids {
+        let xv = *x.get(id).unwrap_or(&0.0) as i64;
+        cols.entry(xv).or_default().push(id);
+    }
+    for (xv, col) in cols.iter_mut() {
+        col.sort_by(|a, b| {
+            rank.get(a)
+                .copied()
+                .unwrap_or(0)
+                .cmp(&rank.get(b).copied().unwrap_or(0))
+                .then_with(|| a.cmp(b))
+        });
+        if *xv == 0 {
+            col.retain(|&c| c != primary);
+            let mid = col.len() / 2;
+            col.insert(mid, primary);
         }
-        for (xv, col) in cols.iter_mut() {
-            col.sort_by(|a, b| {
-                rank.get(a)
-                    .copied()
-                    .unwrap_or(0)
-                    .cmp(&rank.get(b).copied().unwrap_or(0))
-                    .then_with(|| a.cmp(b))
-            });
-            if *xv == 0 {
-                // Re-seat the primary root at the column's vertical middle.
-                col.retain(|&c| c != primary);
-                let mid = col.len() / 2;
-                col.insert(mid, primary);
-            }
-            let len = col.len() as f64;
-            for (i, &id) in col.iter().enumerate() {
-                y.insert(id, i as f64 - (len - 1.0) / 2.0);
-            }
+        let len = col.len() as f64;
+        for (i, &id) in col.iter().enumerate() {
+            y.insert(id, i as f64 - (len - 1.0) / 2.0);
         }
     }
 
@@ -1962,6 +1996,18 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
         }
     }
     let mut gutter_slot: HashMap<String, i64> = HashMap::new();
+    // How many foreign prereqs land in each destination group's gutter. The
+    // gutter stack must be CENTERED on y=0 (like every native column) or it
+    // drags Heracles' bbox-centroid camera (`(minY+maxY)/2`) down by half its
+    // height — chapters importing many cross-chapter prereqs would then open
+    // far below their start quest. `extra_groups` is prereq-id -> set of
+    // destination groups, so the per-group total is the sum of memberships.
+    let mut gutter_total: HashMap<String, i64> = HashMap::new();
+    for set in extra_groups.values() {
+        for eg in set {
+            *gutter_total.entry(eg.clone()).or_insert(0) += 1;
+        }
+    }
 
     for ch in &g.chapters {
         // A chapter maps to a Heracles "group". Key it by the readable title so
@@ -2092,7 +2138,13 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                         *s += 1;
                         v
                     };
-                    let gpos = json!({ "x": gx, "y": slot * 2 });
+                    // Center the gutter stack on y=0: slots 0..total map to
+                    // a symmetric range [-(total-1), +(total-1)] (step 2), so
+                    // the gutter never biases Heracles' y-centroid.
+                    let total =
+                        gutter_total.get(eg).copied().unwrap_or(1).max(1);
+                    let gy = slot * 2 - (total - 1);
+                    let gpos = json!({ "x": gx, "y": gy });
                     groups
                         .entry(eg.clone())
                         .or_insert_with(|| json!({ "id": eg, "position": gpos }));
@@ -3063,8 +3115,12 @@ mod tests {
         );
         let raw = std::fs::read_to_string(path)
             .expect("real Stellar Archetypes fixture present");
-        let g: QuestGraph = serde_json::from_str(&raw)
+        let mut g: QuestGraph = serde_json::from_str(&raw)
             .expect("real anvil-quests.json deserializes via the same serde path");
+        // Production runs the deterministic layout before emit (write_quests
+        // → layout_graph → to_heracles_json); test that exact path, not the
+        // raw model positions which production never ships.
+        layout_graph(&mut g);
         let files = to_heracles_json(&g);
 
         // group key -> ((x,y) -> distinct quest hexes placed there)
@@ -4020,6 +4076,500 @@ mod tests {
                     "config/openloader/data/anvil-content/"
                 )),
             "the content datapack must have participated"
+        );
+    }
+
+    // --- Root-centered layout: REAL fixture through the production emit path
+    // (write_quests lays out a clone then to_heracles_json's it — reproduced
+    // here exactly). Asserts Heracles' own camera formula, decoded from
+    // QuestsWidget.update() bytecode: it opens a group centered on
+    // ((minX+maxX)/2,(minY+maxY)/2) of that group's entries (±100px pad is
+    // symmetric so it cancels). The start quest must sit within 1 of that or
+    // it opens off-screen — the reported "quest not rooted at start" bug.
+
+    /// Re-derive a chapter's primary root with the SAME rule layout_chapter
+    /// uses: intra-chapter dep-free quest, largest forward closure, lex-min id.
+    fn primary_root_of(ch: &QuestChapter) -> Option<String> {
+        let ids: HashSet<&str> =
+            ch.quests.iter().map(|q| q.id.as_str()).collect();
+        let mut succ: HashMap<&str, Vec<&str>> = HashMap::new();
+        let mut indeg: HashMap<&str, usize> = HashMap::new();
+        for q in &ch.quests {
+            indeg.entry(q.id.as_str()).or_insert(0);
+        }
+        for q in &ch.quests {
+            for d in &q.deps {
+                if ids.contains(d.as_str()) {
+                    succ.entry(d.as_str()).or_default().push(q.id.as_str());
+                    *indeg.entry(q.id.as_str()).or_insert(0) += 1;
+                }
+            }
+        }
+        let closure = |s: &str| {
+            let mut seen: HashSet<&str> = HashSet::new();
+            seen.insert(s);
+            let mut st = vec![s];
+            while let Some(u) = st.pop() {
+                if let Some(cs) = succ.get(u) {
+                    for &c in cs {
+                        if seen.insert(c) {
+                            st.push(c);
+                        }
+                    }
+                }
+            }
+            seen.len()
+        };
+        let mut roots: Vec<&str> = ch
+            .quests
+            .iter()
+            .map(|q| q.id.as_str())
+            .filter(|id| indeg.get(id).copied().unwrap_or(0) == 0)
+            .collect();
+        roots.sort_unstable();
+        roots
+            .iter()
+            .max_by(|a, b| {
+                closure(a).cmp(&closure(b)).then_with(|| b.cmp(a))
+            })
+            .map(|s| s.to_string())
+    }
+
+    /// Group key -> the (x,y) of every quest Heracles puts in that group
+    /// (parsed from the EMITTED files, so incoming-gutter foreign prereqs are
+    /// included exactly as the game sees them). Plus (group,hex)->(x,y).
+    #[allow(clippy::type_complexity)]
+    fn emitted_group_points(
+        files: &[(String, String)],
+    ) -> (
+        HashMap<String, Vec<(i64, i64)>>,
+        HashMap<(String, String), (i64, i64)>,
+    ) {
+        let mut group_pts: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+        let mut hex_pos: HashMap<(String, String), (i64, i64)> =
+            HashMap::new();
+        for (p, content) in files {
+            let Some(hex) = p
+                .strip_prefix("config/heracles/quests/")
+                .and_then(|s| s.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let v: serde_json::Value =
+                serde_json::from_str(content).unwrap();
+            let Some(groups) = v
+                .get("display")
+                .and_then(|d| d.get("groups"))
+                .and_then(|x| x.as_object())
+            else {
+                continue;
+            };
+            for (gk, gv) in groups {
+                let pos = gv.get("position").cloned().unwrap_or_default();
+                let x = pos.get("x").and_then(|n| n.as_i64()).unwrap_or(0);
+                let y = pos.get("y").and_then(|n| n.as_i64()).unwrap_or(0);
+                group_pts.entry(gk.clone()).or_default().push((x, y));
+                hex_pos.insert((gk.clone(), hex.to_string()), (x, y));
+            }
+        }
+        (group_pts, hex_pos)
+    }
+
+    #[test]
+    fn real_stellar_origins_root_centered_for_heracles_camera() {
+        // Both REAL graphs: the archetypes sample AND the actual user
+        // instance ("Stellar Origins", 6 chapters / 114 quests / dense
+        // cross-chapter deps) that exposed the bug. Each is driven through
+        // the EXACT production emit path (layout_graph -> to_heracles_json).
+        let mut fixtures_checked = 0;
+        for fixture in [
+            "stellar_archetypes.anvil-quests.json",
+            "stellar_origins.anvil-quests.json",
+        ] {
+            fixtures_checked += 1;
+            let path = format!(
+                "{}/tests/fixtures/real/{fixture}",
+                env!("CARGO_MANIFEST_DIR")
+            );
+            let raw = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("fixture {fixture} present"));
+            let g: QuestGraph = serde_json::from_str(&raw)
+                .expect("real anvil-quests.json deserializes");
+
+            let mut laid = g.clone();
+            layout_graph(&mut laid);
+            let files = to_heracles_json(&laid);
+            let (group_pts, hex_pos) = emitted_group_points(&files);
+
+            let mut failures = Vec::new();
+            for ch in &laid.chapters {
+            let gk = group_key(ch);
+            let Some(pts) = group_pts.get(&gk) else { continue };
+            if pts.is_empty() {
+                continue;
+            }
+            let minx = pts.iter().map(|p| p.0).min().unwrap();
+            let maxx = pts.iter().map(|p| p.0).max().unwrap();
+            let miny = pts.iter().map(|p| p.1).min().unwrap();
+            let maxy = pts.iter().map(|p| p.1).max().unwrap();
+            // Heracles uses integer division (QuestsWidget.update bytecode).
+            let cx = (minx + maxx) / 2;
+            let cy = (miny + maxy) / 2;
+
+            let Some(root) = primary_root_of(ch) else { continue };
+            let root_hex = stable_hex(&format!("{}:{}", ch.id, root));
+            let Some(&(rx, ry)) = hex_pos.get(&(gk.clone(), root_hex.clone()))
+            else {
+                failures.push(format!(
+                    "group {gk:?}: primary root {root:?} (hex {root_hex}) not \
+                     emitted into its own group"
+                ));
+                continue;
+            };
+            if (rx - cx).abs() > 1 || (ry - cy).abs() > 1 {
+                failures.push(format!(
+                    "group {gk:?}: start quest {root:?} at ({rx},{ry}) but \
+                     Heracles opens the camera at centroid ({cx},{cy}) [bbox \
+                     x {minx}..{maxx}, y {miny}..{maxy}] — off-screen on open"
+                ));
+            }
+            }
+            assert!(
+                failures.is_empty(),
+                "[{fixture}] start quest not on Heracles' open-camera \
+                 centroid:\n{}",
+                failures.join("\n")
+            );
+        }
+        assert_eq!(
+            fixtures_checked, 2,
+            "both real fixtures must have been read this run (guards a \
+             renamed/moved fixture silently passing against one)"
+        );
+    }
+
+    #[test]
+    fn layout_graph_is_deterministic_and_emit_byte_identical() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/real/stellar_archetypes.anvil-quests.json"
+        );
+        let g: QuestGraph = serde_json::from_str(
+            &std::fs::read_to_string(path).unwrap(),
+        )
+        .unwrap();
+        let mut a = g.clone();
+        layout_graph(&mut a);
+        let mut b = g.clone();
+        layout_graph(&mut b);
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap(),
+            "layout_graph must be deterministic"
+        );
+        assert_eq!(
+            to_heracles_json(&a),
+            to_heracles_json(&b),
+            "emitted Heracles JSON must be byte-identical across runs"
+        );
+    }
+
+    #[test]
+    fn layout_multi_root_picks_largest_closure_and_centers_it() {
+        // Two intra-chapter roots: R_small (closure 2) and R_big (closure 6).
+        // Rule => primary = R_big; it must land on the group's Heracles
+        // centroid. A shared multi-parent node exercises the DAG path.
+        fn q(id: &str, deps: &[&str]) -> QuestNode {
+            QuestNode {
+                id: id.into(),
+                title: id.into(),
+                description: String::new(),
+                x: 999.0,
+                y: 999.0,
+                deps: deps.iter().map(|s| s.to_string()).collect(),
+                tasks: vec![],
+                rewards: vec![],
+                recipes: vec![],
+                content: None,
+            }
+        }
+        let ch = QuestChapter {
+            id: "ch1".into(),
+            title: "Chapter I: T".into(),
+            quests: vec![
+                q("r_small", &[]),
+                q("s1", &["r_small"]),
+                q("r_big", &[]),
+                q("b1", &["r_big"]),
+                q("b2", &["b1"]),
+                q("b3", &["b1"]),
+                q("b4", &["b2", "b3"]),
+                q("b5", &["b4"]),
+            ],
+        };
+        let g = QuestGraph {
+            title: "T".into(),
+            chapters: vec![ch],
+        };
+        let mut laid = g.clone();
+        layout_graph(&mut laid);
+        let files = to_heracles_json(&laid);
+        let (group_pts, hex_pos) = emitted_group_points(&files);
+        let ch = &laid.chapters[0];
+        assert_eq!(primary_root_of(ch).as_deref(), Some("r_big"));
+        let gk = group_key(ch);
+        let pts = &group_pts[&gk];
+        let cx = (pts.iter().map(|p| p.0).min().unwrap()
+            + pts.iter().map(|p| p.0).max().unwrap())
+            / 2;
+        let cy = (pts.iter().map(|p| p.1).min().unwrap()
+            + pts.iter().map(|p| p.1).max().unwrap())
+            / 2;
+        let (rx, ry) =
+            hex_pos[&(gk.clone(), stable_hex("ch1:r_big"))];
+        assert!(
+            (rx - cx).abs() <= 1 && (ry - cy).abs() <= 1,
+            "r_big at ({rx},{ry}) not on centroid ({cx},{cy})"
+        );
+    }
+
+    #[test]
+    fn layout_pure_chain_centers_root_via_uturn() {
+        // A single linear chain has no branch to split; the U-turn fallback
+        // must still land the root on the Heracles y-centroid.
+        fn q(id: &str, deps: &[&str]) -> QuestNode {
+            QuestNode {
+                id: id.into(),
+                title: id.into(),
+                description: String::new(),
+                x: 0.0,
+                y: 0.0,
+                deps: deps.iter().map(|s| s.to_string()).collect(),
+                tasks: vec![],
+                rewards: vec![],
+                recipes: vec![],
+                content: None,
+            }
+        }
+        let ch = QuestChapter {
+            id: "c".into(),
+            title: "Chapter I: Chain".into(),
+            quests: vec![
+                q("c0", &[]),
+                q("c1", &["c0"]),
+                q("c2", &["c1"]),
+                q("c3", &["c2"]),
+                q("c4", &["c3"]),
+                q("c5", &["c4"]),
+                q("c6", &["c5"]),
+            ],
+        };
+        let g = QuestGraph {
+            title: "T".into(),
+            chapters: vec![ch],
+        };
+        let mut laid = g.clone();
+        layout_graph(&mut laid);
+        let files = to_heracles_json(&laid);
+        let (group_pts, hex_pos) = emitted_group_points(&files);
+        let ch = &laid.chapters[0];
+        let gk = group_key(ch);
+        let pts = &group_pts[&gk];
+        let cx = (pts.iter().map(|p| p.0).min().unwrap()
+            + pts.iter().map(|p| p.0).max().unwrap())
+            / 2;
+        let cy = (pts.iter().map(|p| p.1).min().unwrap()
+            + pts.iter().map(|p| p.1).max().unwrap())
+            / 2;
+        let (rx, ry) = hex_pos[&(gk.clone(), stable_hex("c:c0"))];
+        assert!(
+            (rx - cx).abs() <= 1 && (ry - cy).abs() <= 1,
+            "chain root c0 at ({rx},{ry}) not on centroid ({cx},{cy})"
+        );
+    }
+
+    #[test]
+    fn origins_datapack_emitted_and_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::origins::write_origins_datapack(dir.path(), "anvil")
+            .expect("origins datapack writes");
+        let base =
+            dir.path().join("config/openloader/data/anvil-origins");
+        let mc = base.join("pack.mcmeta");
+        assert!(mc.exists(), "pack.mcmeta written");
+        let v: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&mc).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(v["pack"]["pack_format"], serde_json::json!(15));
+        let layer = base
+            .join("data/origins/origin_layers/origin.json");
+        assert!(layer.exists(), "origin layer file written");
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(&layer).unwrap(),
+        )
+        .expect("layer json parses");
+        let pdir = base.join("data/anvil/powers");
+        let n = std::fs::read_dir(&pdir).map(|r| r.count()).unwrap_or(0);
+        assert!(n >= 1, "expected >=1 power json, got {n}");
+    }
+
+    #[test]
+    fn origins_core_gate_distinguishes_core_from_addon() {
+        use crate::origins::is_origins_core;
+        assert!(is_origins_core("3BeIrqZR", "anything.jar"));
+        assert!(!is_origins_core(
+            "FiDptjtR",
+            "Origins-Classes-1.20-1.7.0.jar"
+        ));
+        assert!(is_origins_core("zzz", "Origins-1.10.2+mc.1.20.x.jar"));
+        assert!(!is_origins_core("zzz", "apoli-2.9.2.jar"));
+        assert!(!is_origins_core("zzz", "calio-1.11.2.jar"));
+        assert!(!is_origins_core("zzz", "origins-classes-1.7.0.jar"));
+    }
+
+    /// SURGICAL, EXPLICIT-ONLY one-shot: re-emit the already-on-disk crashing
+    /// instance through the REAL production path so its stale Heracles quest
+    /// JSON gets the centered layout and its missing `anvil-origins/` datapack
+    /// is written. A code fix alone does NOT touch files already written by an
+    /// earlier build. `#[ignore]` so it never runs in CI; a hard id guard so
+    /// it can only ever rewrite that one instance.
+    ///
+    /// SURGICAL ONE-SHOT — DO NOT generalize, parameterize the id, or remove
+    /// the path guard. It mutates a real on-disk user instance; the guard is
+    /// the only thing preventing an accidental clobber. Delete this whole
+    /// test rather than "make it reusable".
+    ///
+    ///   cargo test --lib quest::tests::reemit_crashing_instance \
+    ///       -- --ignored --exact --nocapture
+    #[test]
+    #[ignore]
+    fn reemit_crashing_instance() {
+        const ID: &str = "18b09b45cf64ee883408";
+        let home = std::env::var("HOME").expect("HOME set");
+        let dir = std::path::PathBuf::from(&home)
+            .join(".anvil/instances")
+            .join(ID);
+        assert!(
+            dir.join("anvil-quests.json").exists(),
+            "guard: {} must be the existing crashing instance",
+            dir.display()
+        );
+        let raw = std::fs::read_to_string(dir.join("anvil-quests.json"))
+            .expect("read source-of-truth graph");
+        let g: QuestGraph =
+            serde_json::from_str(&raw).expect("graph deserializes");
+
+        // BASELINE: the launch log is the arbiter. Print the PREVIOUS run's
+        // Apoli-rejection lines so there is a concrete before/after to compare
+        // against post-relaunch.
+        let log = dir.join("logs/latest.log");
+        if let Ok(prev) = std::fs::read_to_string(&log) {
+            let bad: Vec<&str> = prev
+                .lines()
+                .filter(|l| {
+                    l.contains("problem reading")
+                        && (l.contains("anvil:") || l.contains("Origin file"))
+                })
+                .collect();
+            eprintln!(
+                "BEFORE (previous {} run): {} Apoli rejection line(s){}",
+                ID,
+                bad.len(),
+                if bad.is_empty() {
+                    String::new()
+                } else {
+                    format!(":\n  {}", bad.join("\n  "))
+                }
+            );
+        }
+
+        // EXACT production emit (lays out a centered clone, writes Heracles
+        // JSON + recipe/content datapacks + serialized graph).
+        write_quests(&g, &dir).expect("write_quests");
+
+        // Mirror the curator's Origins gate against the real instance.json.
+        let inst_json = std::fs::read_to_string(
+            std::path::PathBuf::from(&home)
+                .join(".anvil/instances")
+                .join(format!("{ID}.json")),
+        )
+        .expect("instance.json present");
+        let iv: serde_json::Value =
+            serde_json::from_str(&inst_json).unwrap();
+        let mods = iv["mods"].as_array().cloned().unwrap_or_default();
+        let has_core = mods.iter().any(|m| {
+            crate::origins::is_origins_core(
+                m["project_id"].as_str().unwrap_or(""),
+                m["name"].as_str().unwrap_or(""),
+            )
+        });
+        let has_ol = mods.iter().any(|m| {
+            let s = |k: &str| m[k].as_str().unwrap_or("").to_lowercase();
+            [s("project_id"), s("name"), s("path")]
+                .iter()
+                .any(|v| v.contains("open-loader") || v.contains("openloader"))
+        });
+        assert!(
+            has_core && has_ol,
+            "instance must have Origins core + Open Loader (core={has_core}, \
+             open_loader={has_ol})"
+        );
+        crate::origins::write_origins_datapack(&dir, "anvil")
+            .expect("origins datapack");
+
+        // ON-DISK SCHEMA VERIFICATION (not just "a file exists"): the exact
+        // shape that Apoli rejected last time must now be correct.
+        let od = dir.join("config/openloader/data/anvil-origins");
+        assert!(od.join("pack.mcmeta").exists(), "pack.mcmeta missing");
+        let read = |p: std::path::PathBuf| -> serde_json::Value {
+            serde_json::from_str(
+                &std::fs::read_to_string(&p)
+                    .unwrap_or_else(|_| panic!("read {}", p.display())),
+            )
+            .unwrap_or_else(|_| panic!("parse {}", p.display()))
+        };
+        // Every emitted power: name is a STRING (not the rejected object),
+        // type is never the invalid `apoli:water_breathing`.
+        for e in std::fs::read_dir(od.join("data/anvil/powers")).unwrap() {
+            let v = read(e.unwrap().path());
+            assert!(v["name"].is_string(), "power name must be a plain string");
+            assert!(v["description"].is_string(), "power description must be a string");
+            assert_ne!(
+                v["type"].as_str(), Some("apoli:water_breathing"),
+                "the invalid type must never be emitted"
+            );
+        }
+        // Every emitted origin: name string, impact integer 0..=3.
+        for e in std::fs::read_dir(od.join("data/anvil/origins")).unwrap() {
+            let v = read(e.unwrap().path());
+            assert!(v["name"].is_string(), "origin name must be a plain string");
+            assert!(v["impact"].is_i64(), "origin impact must be an integer");
+        }
+        // Survivalist must reference the SHIPPED water-breathing power and
+        // we must NOT have emitted a file for it.
+        let surv = read(od.join("data/anvil/origins/survivalist.json"));
+        let powers: Vec<&str> = surv["powers"]
+            .as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(
+            powers.contains(&"origins:water_breathing"),
+            "survivalist must reference the shipped power, got {powers:?}"
+        );
+        assert!(
+            !od.join("data/anvil/powers/water_breathing.json").exists(),
+            "must not emit a file for a shipped power"
+        );
+
+        eprintln!(
+            "\nAFTER: re-emitted {ID} — centered Heracles layout + \
+             SCHEMA-CORRECT anvil-origins datapack written to {}\n\
+             NEXT (real proof — the launch log is the arbiter): relaunch this \
+             instance, then:\n  grep -E 'Registry contains|problem reading.*anvil' \
+             '{}'\nExpect: `Finished loading origins ... Registry contains N \
+             origins` with N > 25 (25 stock + ours) AND ZERO `There was a \
+             problem reading ... anvil:*` lines.",
+            dir.display(),
+            log.display()
         );
     }
 }

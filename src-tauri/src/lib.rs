@@ -456,7 +456,7 @@ fn import_mrpack(path: String) -> Result<Instance, String> {
 
 #[tauri::command]
 async fn launch_instance(app: AppHandle, instance_id: String) -> Result<(), String> {
-    let inst = instance::load_instances()
+    let mut inst = instance::load_instances()
         .into_iter()
         .find(|i| i.id == instance_id)
         .ok_or_else(|| "instance not found".to_string())?;
@@ -468,6 +468,16 @@ async fn launch_instance(app: AppHandle, instance_id: String) -> Result<(), Stri
         .await
         .map_err(|e| e.to_string())?;
     let _ = auth::save_account(&account);
+
+    // Stamp "last played" now that the instance is genuinely being launched
+    // (auth succeeded, the game is about to start). Nothing else ever wrote
+    // this field, so the UI showed "never" forever. Persist before spawning
+    // so it survives even if the game later crashes — you still played it.
+    inst.last_played = Some(chrono::Utc::now().to_rfc3339());
+    if let Err(e) = instance::save_instance(&inst) {
+        // Non-fatal: a stat write must never block actually launching.
+        eprintln!("warning: could not persist last_played: {e}");
+    }
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<LaunchEvent>();
     let app2 = app.clone();
