@@ -5835,3 +5835,159 @@ mod edit_pack_real_data_tests {
         );
     }
 }
+
+/// Step 4 END-TO-END (the #13-lesson test: a synthetic hand-built pool
+/// passed while production never reached that state). Drives the REAL
+/// `resolve_pack_with_state` seam with the Indium/Immersive-Portals/Sodium
+/// crash roots + Sodium's FULL version list cached. Proves the whole chain:
+/// generalised floor-lookahead expands Sodium's pool → general re-pin picks
+/// the conjunction-satisfying version → fixpoint re-runs → the FINAL pinned
+/// Sodium is 0.5.13. Asserts on `entries` (the resolved pins) — artifact-
+/// free, unlike "zero issues" which a statically-seeded manifest cannot
+/// track the way production's per-jar re-scan does.
+#[cfg(test)]
+mod step4_integration_tests {
+    use super::*;
+    use crate::modrinth::Version;
+
+    fn ver(pid: &str, vid: &str, vnum: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": vid, "project_id": pid, "name": vid,
+            "version_number": vnum, "game_versions": ["1.20.1"],
+            "version_type": "release", "loaders": ["fabric"],
+            "downloads": 0, "date_published": "2024-01-01T00:00:00Z",
+            "files": [{
+                "hashes": { "sha1": "0".repeat(40), "sha512": "0".repeat(128) },
+                "url": format!("https://cdn.modrinth.com/{pid}/{vid}.jar"),
+                "filename": format!("{pid}-{vid}.jar"),
+                "primary": true, "size": 1
+            }],
+            "dependencies": []
+        })
+    }
+    fn vers(items: &[serde_json::Value]) -> Vec<Version> {
+        serde_json::from_value(serde_json::Value::Array(items.to_vec()))
+            .expect("Version list deserializes")
+    }
+    fn jm(
+        provided: &[(&str, &str)],
+        requires: &[(&str, &str)],
+        breaks: &[(&str, &str)],
+        version: &str,
+    ) -> crate::registry::JarManifest {
+        crate::registry::JarManifest {
+            provided: provided
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            requires: requires
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            breaks: breaks
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+            version: version.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn end_to_end_general_repin_fixes_the_real_sodium_crash() {
+        let roots = vec![
+            ModRef { project_id: "sodium".into(), version_id: "s058".into() },
+            ModRef { project_id: "indium".into(), version_id: "i1036".into() },
+            ModRef {
+                project_id: "immersive_portals".into(),
+                version_id: "ip520".into(),
+            },
+        ];
+
+        // vcache: Sodium has its FULL real-shaped list (the lookahead must
+        // expand past the lone pinned 0.5.8); indium/IP single versions.
+        let mut vcache: VersionCache = std::collections::HashMap::new();
+        vcache.insert(
+            "sodium".into(),
+            Ok(vers(&[
+                ver("sodium", "s058", "0.5.8+mc1.20.1"),
+                ver("sodium", "s0511", "0.5.11+mc1.20.1"),
+                ver("sodium", "s0513", "0.5.13+mc1.20.1"),
+            ])),
+        );
+        vcache.insert(
+            "indium".into(),
+            Ok(vers(&[ver("indium", "i1036", "1.0.36+mc1.20.1")])),
+        );
+        vcache.insert(
+            "immersive_portals".into(),
+            Ok(vers(&[ver("immersive_portals", "ip520", "5.2.0")])),
+        );
+
+        let mut scache: SideCache = std::collections::HashMap::new();
+        let mut scanned = std::collections::HashSet::new();
+        for p in ["sodium", "indium", "immersive_portals"] {
+            scache.insert(
+                p.to_string(),
+                ("required".into(), "required".into()),
+            );
+            scanned.insert(p.to_string()); // jar_augment no-op (pre-seeded)
+        }
+        let mut provided = std::collections::HashSet::new();
+
+        // Pre-seeded real manifests (jar_augment is a no-op): Indium needs
+        // sodium >=0.5.11 <0.6; Immersive Portals breaks sodium ≠ 0.5.13.
+        let mut manifests: std::collections::HashMap<
+            String,
+            crate::registry::JarManifest,
+        > = std::collections::HashMap::new();
+        manifests.insert(
+            "sodium".into(),
+            jm(&[("sodium", "0.5.8+mc1.20.1")], &[], &[], "0.5.8+mc1.20.1"),
+        );
+        manifests.insert(
+            "indium".into(),
+            jm(
+                &[("indium", "1.0.36+mc1.20.1")],
+                &[("sodium", ">=0.5.11 <0.6")],
+                &[],
+                "1.0.36+mc1.20.1",
+            ),
+        );
+        manifests.insert(
+            "immersive_portals".into(),
+            jm(
+                &[("immersive_portals", "5.2.0")],
+                &[],
+                &[("sodium", "<0.5.13 || >0.5.13")],
+                "5.2.0",
+            ),
+        );
+
+        let mr = Modrinth::new();
+        let (entries, _issues) = resolve_pack_with_state(
+            &mr,
+            &roots,
+            "1.20.1",
+            "fabric",
+            &mut vcache,
+            &mut scache,
+            &mut scanned,
+            &mut provided,
+            &mut manifests,
+        )
+        .await
+        .expect("offline resolve succeeds");
+
+        let sodium = entries
+            .iter()
+            .find(|e| e.project_id == "sodium")
+            .expect("sodium stays in the closure");
+        assert_eq!(
+            sodium.version_id, "s0513",
+            "the generalised lookahead + general re-pin must move Sodium \
+             0.5.8 -> 0.5.13 (the only version satisfying Indium's \
+             >=0.5.11 <0.6 AND outside Immersive Portals' break); got {}",
+            sodium.version_id
+        );
+    }
+}

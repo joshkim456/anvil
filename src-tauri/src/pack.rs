@@ -552,6 +552,12 @@ pub fn version_floor_repins(
         if let (Some(req_k), Some(cur)) = (req_major, chosen_by.get(flk_pid)) {
             let too_new =
                 kotlin_major(&cur.path).map(|c| c > req_k).unwrap_or(false);
+            // The `!repins.contains(flk_pid)` guard is defense-in-depth: today
+            // it is unreachable (when the FLK block runs, the general block
+            // left FLK alone because an open-ended `>=…+kotlin.N` is satisfied
+            // by the current pin). It protects a future mod that declares BOTH
+            // an open-ended-kotlin constraint AND a bounded depends/breaks on
+            // FLK — the general (more authoritative, expressed) repin wins.
             if too_new
                 && !already.contains(flk_pid)
                 && !repins.iter().any(|(p, _)| p == flk_pid)
