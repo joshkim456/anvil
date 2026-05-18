@@ -1,47 +1,44 @@
-//! Custom-Origins datapack ENGINE (v1).
+//! Custom-Origins datapack ENGINE.
 //!
-//! CONTRACT: like `recipe.rs`/`content.rs`, this is a reusable, persistence-FREE
-//! engine. It owns a small typed model (`OriginsSet` = origins + powers), a
-//! curated v1 starter set (`build_v1_set`), an in-code referential-integrity
-//! validator (`validate`), a deterministic datapack serializer
-//! (`build_origins_datapack`), and a thin instance writer
-//! (`write_origins_datapack`). It does NOT own a source-of-truth file and is NOT
-//! yet wired into the curator/quest pipeline — conversational/curator wiring is
-//! a DELIBERATE out-of-v1 follow-up (not done here).
+//! CONTRACT: like `recipe.rs`/`content.rs`, a reusable, persistence-FREE engine
+//! — a typed model (`OriginsSet` = origins + powers), a documentation-grounded
+//! catalog + validator that GATES emission (`validate` -> `Validated`), a
+//! deterministic serializer (`emit`), a deterministic `rescue_set()` used to
+//! repair an already-broken instance with NO LLM call, and the thin instance
+//! writer (`write_origins_datapack`). It owns no source-of-truth file.
 //!
-//! WHY THIS DATAPACK ROOT: the files live under
+//! STATE MACHINE: the only way to produce a datapack is
+//! `OriginsSet` -> `validate` -> `Validated` -> `emit`. `emit` is private and
+//! takes `&Validated`, which is ONLY constructable by `validate`, so an
+//! invalid set is structurally impossible to emit. The catalog (`SAFE_TYPES`,
+//! `FULL_WHITELIST`, `SHIPPED_ORIGINS_POWERS`) is the documentation grounded
+//! in `docs/modding/origins_apoli_2.9.2_schema.md` (decompiled Apoli 2.9.2 +
+//! Origins 1.10.2 + the runtime log) and is jar-checked by the tests so it
+//! cannot silently drift from the game.
+//!
+//! WHY THIS DATAPACK ROOT: files live under
 //! `config/openloader/data/anvil-origins/` — a SIBLING of Slice 2's
-//! `config/openloader/data/anvil-recipes/` and Slice 3's
-//! `config/openloader/data/anvil-content/`, each with its own `pack.mcmeta`.
-//! Open Loader is a generic datapack injector (it loads any
-//! `config/openloader/data/<pack>/` whose `pack.mcmeta` has the right
-//! `pack_format`). Origins/Apoli/Calio are NORMAL Fabric resource-reload
-//! listeners that read whatever the loaded-datapack registry surfaces, so an
-//! Origins datapack injected this way is picked up exactly like the recipe and
-//! content datapacks already are. Mirroring this convention (vs. inventing a
-//! new on-disk location) is the source-verified placement for the exact
-//! MC 1.20.1 Fabric stack (Origins 1.10.2 / Apoli 2.9.2 / Calio 1.11.2).
+//! `anvil-recipes` and Slice 3's `anvil-content`, each with its own
+//! `pack.mcmeta`. Open Loader injects any `config/openloader/data/<pack>/` and
+//! Origins/Apoli are normal resource-reload listeners, so the pack is picked
+//! up exactly like the recipe/content packs already are (proven in the
+//! instance launch log: `Loaded folder Data Pack from .../anvil-origins`).
 //!
-//! ORIGINS DATAPACK LAYOUT (decompiled-source-verified, NOT current wiki):
-//! - `<root>/pack.mcmeta` -> `{"pack":{"pack_format":15,"description":...}}`
-//!   (15 = MC 1.20.1; a wrong format SILENTLY rejects the whole pack).
-//! - `<root>/data/<ns>/powers/<power_id>.json`
-//! - `<root>/data/<ns>/origins/<origin_id>.json`
-//! - `<root>/data/origins/origin_layers/origin.json` — the layer file is
-//!   NAMESPACE-INDEPENDENT (the `origins` path segment is the Origins mod's own
-//!   namespace / the layer identity `origins:origin`, NOT our pack `<ns>`).
-//!   Content `{"origins":[...]}` with NO `replace` key (the loader
-//!   MERGES/appends layer entries across packs; `replace:true` would wipe the
-//!   10 stock origins).
-//! - `<root>/assets/<ns>/lang/en_us.json` — REQUIRED. `name`/`description` on
-//!   BOTH origins and powers are TRANSLATION KEYS, not literal text; without a
-//!   paired lang file the raw keys show in-game.
-//!
-//! KNOWN in-game-only check (cannot be proven by offline parsing tests, flagged
-//! per the trust-the-spec instruction): whether Open Loader surfaces
-//! `assets/<ns>/lang/en_us.json` to the CLIENT (where translation keys actually
-//! resolve). The spec is trusted; the file is emitted. Every other property is
-//! asserted by the codec-shape tests below.
+//! HARD SCHEMA FACTS (primary-source verified — decompiled jars + the runtime
+//! log; the OLD code's "literal Component, verified against decompiled
+//! Origins" claim was FALSE and the running game disproved it):
+//! - `name`/`description` on Origin, Power AND OriginLayer are PLAIN STRINGS
+//!   (`JsonHelper.getString`); a `{"text":...}` object => the whole file is
+//!   skipped (`Expected name to be a string, was an object`). They are typed
+//!   `String` here so the component bug is unrepresentable.
+//! - A power `type` must be a registered Apoli factory id (104 of them;
+//!   `origins:<x>` aliases `apoli:<x>`). `apoli:water_breathing` is NOT one.
+//! - Water-breathing/climbing/etc. as built-ins = REFERENCE the shipped
+//!   `origins:<x>` power id in the origin's `powers` (Origins' own code
+//!   implements them); never define your own. See `SHIPPED_ORIGINS_POWERS`.
+//! - `impact` is an INTEGER 0..=3 (NOT the string enum the old code emitted).
+//! - The layer file appends to the stock chooser with
+//!   `{"replace": false, "origins": [...]}`.
 
 use std::path::Path;
 
@@ -55,14 +52,16 @@ use anyhow::Context;
 /// the whole pack).
 const PACK_FORMAT_1_20: i64 = 15;
 
-/// The origins-datapack root: a SIBLING of the recipe/content datapacks. Each
-/// engine owns its own Open Loader datapack root + `pack.mcmeta`.
+/// The origins-datapack root: a SIBLING of the recipe/content datapacks.
 const ROOT: &str = "config/openloader/data/anvil-origins";
 
-/// Modrinth project id of Origins **core** (slug `origins`). The datapack's
-/// powers are Apoli powers that core registers; Origins-Classes (`FiDptjtR`)
-/// is an ADDON and must NOT by itself trigger the datapack (it would load
-/// against a power engine that may not be present and surface broken origins).
+/// The layer file path is fixed and namespace-INDEPENDENT: the `origins`
+/// segment is the Origins mod's own namespace (layer identity `origins:origin`,
+/// the layer that surfaces custom origins on the normal character screen).
+const LAYER_PATH_SUFFIX: &str = "data/origins/origin_layers/origin.json";
+
+/// Modrinth project id of Origins **core** (slug `origins`). Origins-Classes
+/// (`FiDptjtR`) is an ADDON and must NOT by itself trigger the datapack.
 pub const ORIGINS_CORE_PROJECT_ID: &str = "3BeIrqZR";
 
 /// Whether a single pinned mod is Origins **core** (not an addon). Primary
@@ -81,338 +80,585 @@ pub fn is_origins_core(project_id: &str, jar_name: &str) -> bool {
         && !n.contains("calio")
 }
 
-/// The layer file path is fixed and namespace-INDEPENDENT: the `origins`
-/// segment is the Origins mod's own namespace (layer identity `origins:origin`,
-/// the layer that surfaces custom origins on the normal character screen).
-const LAYER_PATH_SUFFIX: &str = "data/origins/origin_layers/origin.json";
-
 // ---------------------------------------------------------------------------
-// Allowlists (source-verified v1 SAFE catalog)
+// CATALOG — the documentation-grounded source of truth. Transcribed from the
+// primary-source reference `docs/modding/origins_apoli_2.9.2_schema.md`
+// (decompiled Apoli 2.9.2 `PowerFactories` + the runtime log). Two surfaces:
+//
+//  * `SAFE_TYPES`  — the SMALL set a generator/LLM may design against, each
+//    with its required body fields. These have a stock example in the exact
+//    stack so the emitted shape is known-correct.
+//  * `FULL_WHITELIST` — every power-factory id registered in Apoli 2.9.2. The
+//    validator rejects any `type` not here (this is what catches
+//    `apoli:water_breathing`, which is NOT a factory).
+//
+// `apoli:water_breathing` is deliberately ABSENT: it is not a power factory.
+// Water breathing is granted by REFERENCING the shipped `origins:water_breathing`
+// power id in an origin's `powers` (see `SHIPPED_ORIGINS_POWERS`).
 // ---------------------------------------------------------------------------
 
-/// Apoli power-type ids that have a real bundled example in the exact stack, so
-/// the emitted shape is known-correct. NEVER includes `origins:simple`/
-/// `apoli:simple` (a hardcoded no-op sentinel).
-const ALLOWED_POWER_TYPES: &[&str] = &[
-    "apoli:attribute",
-    "apoli:night_vision",
-    "apoli:water_breathing",
-    "apoli:modify_falling",
-    "apoli:climbing",
-    "apoli:modify_jump",
-    "apoli:modify_damage_taken",
+/// A SAFE power type + its REQUIRED body field names (everything besides the
+/// envelope `type`/`name`/`description`). Empty = self-contained (no required
+/// body). Jar-checked by `catalog_safe_required_fields_subset_of_jar`.
+pub struct SafeType {
+    pub id: &'static str,
+    pub required: &'static [&'static str],
+}
+
+/// The model-facing safe catalog. Order is the prompt-presentation order.
+pub const SAFE_TYPES: &[SafeType] = &[
+    SafeType { id: "apoli:attribute", required: &["modifier"] },
+    SafeType { id: "apoli:modify_jump", required: &["modifier"] },
+    SafeType { id: "apoli:modify_damage_taken", required: &["modifier"] },
+    SafeType { id: "apoli:modify_falling", required: &["velocity"] },
+    SafeType { id: "apoli:night_vision", required: &[] },
+    SafeType { id: "apoli:climbing", required: &[] },
+    SafeType { id: "apoli:fire_immunity", required: &[] },
+    SafeType { id: "apoli:swimming", required: &[] },
+    SafeType { id: "apoli:invisibility", required: &[] },
 ];
 
-/// Vanilla attribute ids the `apoli:attribute` modifier may target in v1.
+/// Every Apoli 2.9.2 registered power-factory id (bare, no namespace).
+/// `origins:<x>` is an alias of `apoli:<x>` so either namespace validates.
+/// The validator only uses this for set membership.
+pub const FULL_WHITELIST: &[&str] = &[
+    "action_on_being_used", "action_on_block_break", "action_on_block_use",
+    "action_on_callback", "action_on_entity_use", "action_on_hit",
+    "action_on_item_use", "action_on_land", "action_on_wake_up",
+    "action_over_time", "action_when_damage_taken", "action_when_hit",
+    "active_self", "attacker_action_when_hit", "attribute",
+    "attribute_modify_transfer", "burn", "climbing", "conditioned_attribute",
+    "conditioned_restrict_armor", "cooldown", "creative_flight",
+    "damage_over_time", "disable_regen", "effect_immunity", "elytra_flight",
+    "entity_glow", "entity_group", "exhaust", "fire_immunity",
+    "fire_projectile", "freeze", "grounded", "ignore_water", "inventory",
+    "invisibility", "invulnerability", "item_on_item", "keep_inventory",
+    "launch", "lava_vision", "model_color", "modify_air_speed", "modify_attribute",
+    "modify_block_render", "modify_break_speed", "modify_camera_submersion",
+    "modify_crafting", "modify_damage_dealt", "modify_damage_taken",
+    "modify_exhaustion", "modify_falling", "modify_fluid_render",
+    "modify_food", "modify_grindstone", "modify_harvest", "modify_healing",
+    "modify_insomnia_ticks", "modify_jump", "modify_lava_speed",
+    "modify_player_spawn", "modify_projectile_damage", "modify_slipperiness",
+    "modify_status_effect_amplifier", "modify_status_effect_duration",
+    "modify_swim_speed", "modify_velocity", "modify_xp_gain", "multiple",
+    "night_vision", "overlay", "particle", "phasing", "prevent_being_used",
+    "prevent_block_selection", "prevent_block_use", "prevent_death",
+    "prevent_elytra_flight", "prevent_entity_collision",
+    "prevent_entity_render", "prevent_entity_use", "prevent_feature_render",
+    "prevent_game_event", "prevent_item_use", "prevent_sleep",
+    "prevent_sprinting", "recipe", "resource", "restrict_armor",
+    "self_action_on_hit", "self_action_on_kill", "self_action_when_hit",
+    "self_glow", "shader", "shaking", "simple", "stacking_status_effect",
+    "starting_equipment", "status_bar_texture", "target_action_on_hit",
+    "toggle", "toggle_night_vision", "tooltip", "walk_on_fluid",
+];
+
+/// Stock powers Origins ships in its OWN jar (`data/origins/powers/*.json`),
+/// referenced as `origins:<id>`. Anvil never emits a file for these — Origins'
+/// own code/mixins implement the behaviour. This is the ONLY correct way to
+/// grant water-breathing/climbing/etc. as built-ins. Jar-checked by
+/// `shipped_powers_subset_of_origins_jar`.
+pub const SHIPPED_ORIGINS_POWERS: &[&str] = &[
+    "origins:water_breathing",
+    "origins:water_vision",
+    "origins:aqua_affinity",
+    "origins:swim_speed",
+    "origins:like_water",
+    "origins:slow_falling",
+    "origins:climbing",
+    "origins:fire_immunity",
+    "origins:fall_immunity",
+    "origins:scare_creepers",
+    "origins:phantomize",
+    "origins:elytra",
+    "origins:cat_vision",
+];
+
+/// Attribute-modifier operations valid in 1.20.1 Apoli (the guaranteed-safe
+/// legacy three; proven by stock Origins files).
+const ALLOWED_OPERATIONS: &[&str] = &["addition", "multiply_base", "multiply_total"];
+
+/// Vanilla attributes a SAFE `apoli:attribute` power may target (the
+/// documented player-relevant generics).
 const ALLOWED_ATTRIBUTES: &[&str] = &[
     "minecraft:generic.max_health",
     "minecraft:generic.armor",
+    "minecraft:generic.armor_toughness",
     "minecraft:generic.movement_speed",
     "minecraft:generic.attack_damage",
+    "minecraft:generic.attack_speed",
+    "minecraft:generic.knockback_resistance",
+    "minecraft:generic.luck",
 ];
 
-/// Attribute-modifier operations valid in 1.20.1 Apoli.
-const ALLOWED_OPERATIONS: &[&str] = &["addition", "multiply_base", "multiply_total"];
+/// Strip an `apoli:`/`origins:` prefix to the bare factory id (the alias is
+/// real: Origins calls `NamespaceAlias.addAlias("origins","apoli")`).
+fn bare_power_type(t: &str) -> &str {
+    t.strip_prefix("apoli:")
+        .or_else(|| t.strip_prefix("origins:"))
+        .unwrap_or(t)
+}
 
-/// Origin `impact` enum (the exact 1.20.1 Origins values).
-const ALLOWED_IMPACTS: &[&str] = &["none", "low", "medium", "high"];
-
-/// Real vanilla item ids used as origin `icon`s in v1 (must be a REAL vanilla
-/// item id or the icon silently fails to render).
-const ALLOWED_ICONS: &[&str] = &[
-    "minecraft:netherite_chestplate",
-    "minecraft:feather",
-    "minecraft:torch",
-];
+fn safe_type(id: &str) -> Option<&'static SafeType> {
+    SAFE_TYPES.iter().find(|s| s.id == id)
+}
 
 // ---------------------------------------------------------------------------
-// Typed model
+// Typed model — `name`/`description` are `String` so the component bug is
+// unrepresentable; `impact` is `i64` so the string-impact bug is too.
 // ---------------------------------------------------------------------------
 
-/// One Apoli power. `body` is the source-verified power-type JSON shape minus
-/// the translation keys (those are derived deterministically from `id`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Power {
-    /// Bare power id (no namespace); becomes `data/<ns>/powers/<id>.json` and
-    /// is referenced as `<ns>:<id>` from origins.
+    /// Bare power id (no namespace); becomes `data/<ns>/powers/<id>.json`.
     pub id: String,
-    /// The Apoli power-type id (must be in `ALLOWED_POWER_TYPES`).
+    /// Plain display name — emitted VERBATIM as a JSON string.
+    pub name: String,
+    /// Plain description — emitted VERBATIM as a JSON string.
+    pub description: String,
+    /// The Apoli power-type id (validated against `FULL_WHITELIST`).
+    #[serde(rename = "type")]
     pub power_type: String,
     /// Type-specific fields (everything except `type`/`name`/`description`).
-    /// Built only via the typed constructors below so the shape is the single
-    /// source of truth.
+    #[serde(default)]
     pub body: serde_json::Map<String, serde_json::Value>,
 }
 
-/// One Origin composing 1+ emitted powers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Origin {
     /// Bare origin id; becomes `data/<ns>/origins/<id>.json`.
     pub id: String,
-    /// Bare power ids this origin grants (each MUST be an emitted `Power.id`).
+    pub name: String,
+    pub description: String,
+    /// Power references. Each entry is EITHER a bare local power id (must be an
+    /// emitted `Power.id`) OR a fully-qualified shipped `origins:<x>` id (must
+    /// be in `SHIPPED_ORIGINS_POWERS`). Classified by `validate`.
     pub powers: Vec<String>,
-    /// Real vanilla item id (must be in `ALLOWED_ICONS`).
+    /// Vanilla item id for the selection-screen icon (`ns:path`).
     pub icon: String,
-    /// One of `ALLOWED_IMPACTS`.
-    pub impact: String,
+    /// Selection-screen impact, 0..=3 (0 none .. 3 high).
+    pub impact: i64,
     /// Display order on the character screen (distinct per origin).
     pub order: i64,
 }
 
-/// The full typed set: every power referenced by any origin must be present.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OriginsSet {
     pub origins: Vec<Origin>,
     pub powers: Vec<Power>,
 }
 
-/// Referential-integrity failure (the negative-test seam).
+/// A set proven valid by [`validate`]. Only `validate` constructs this, and
+/// [`emit`] only accepts this — invalid output is structurally impossible.
+#[derive(Debug, Clone)]
+pub struct Validated(OriginsSet);
+
+impl Validated {
+    pub fn get(&self) -> &OriginsSet {
+        &self.0
+    }
+}
+
+/// How an origin's power reference resolves (decided BY the validator from the
+/// model's string, never supplied by the model).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PowerRef<'a> {
+    /// A power Anvil emits a file for; referenced as `<ns>:<id>`.
+    Local(&'a str),
+    /// A power Origins itself ships; referenced VERBATIM (already `origins:x`).
+    Shipped(&'a str),
+}
+
+fn classify_power_ref<'a>(
+    s: &'a str,
+    emitted: &std::collections::BTreeSet<&str>,
+) -> Option<PowerRef<'a>> {
+    if SHIPPED_ORIGINS_POWERS.contains(&s) {
+        Some(PowerRef::Shipped(s))
+    } else if emitted.contains(s) {
+        Some(PowerRef::Local(s))
+    } else {
+        None
+    }
+}
+
+/// Referential-integrity / schema failure. `validate` returns EVERY failure.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IntegrityError {
-    /// `id` is not lowercase `[a-z0-9_.-]+`.
     BadId(String),
-    /// Two powers / two origins share an id.
     DuplicateId(String),
-    /// Origin references a power id with no emitted power file.
-    DanglingPowerRef { origin: String, power: String },
-    /// Power type not in the SAFE catalog.
+    EmptyText { what: String, field: &'static str },
+    /// Power `type` is not a registered Apoli factory id.
     BadPowerType { power: String, ty: String },
-    /// Origin icon is not a real allowlisted vanilla item.
-    BadIcon { origin: String, icon: String },
-    /// Origin impact not in {none,low,medium,high}.
-    BadImpact { origin: String, impact: String },
-    /// `apoli:attribute` body targets a non-allowlisted attribute.
+    /// A SAFE power type is missing a required body field.
+    MissingRequiredField { power: String, ty: String, field: &'static str },
+    /// `apoli:attribute` targets a non-allowlisted attribute.
     BadAttribute { power: String, attribute: String },
-    /// An attribute-modifier operation is not valid.
+    /// A modifier operation is not valid.
     BadOperation { power: String, operation: String },
+    /// Origin power ref resolves to neither an emitted power nor a shipped one.
+    DanglingPowerRef { origin: String, power: String },
+    /// Origin icon is not a well-formed `namespace:path`.
+    BadIcon { origin: String, icon: String },
+    /// Origin impact outside 0..=3.
+    BadImpact { origin: String, impact: i64 },
     /// No origins => the layer would be empty.
     EmptySet,
 }
 
 impl std::fmt::Display for IntegrityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use IntegrityError::*;
         match self {
-            IntegrityError::BadId(s) => write!(f, "invalid id `{s}` (must be lowercase [a-z0-9_.-]+)"),
-            IntegrityError::DuplicateId(s) => write!(f, "duplicate id `{s}`"),
-            IntegrityError::DanglingPowerRef { origin, power } => {
-                write!(f, "origin `{origin}` references unemitted power `{power}`")
-            }
-            IntegrityError::BadPowerType { power, ty } => {
-                write!(f, "power `{power}` has non-catalog type `{ty}`")
-            }
-            IntegrityError::BadIcon { origin, icon } => {
-                write!(f, "origin `{origin}` has non-vanilla icon `{icon}`")
-            }
-            IntegrityError::BadImpact { origin, impact } => {
-                write!(f, "origin `{origin}` has bad impact `{impact}`")
-            }
-            IntegrityError::BadAttribute { power, attribute } => {
-                write!(f, "power `{power}` targets bad attribute `{attribute}`")
-            }
-            IntegrityError::BadOperation { power, operation } => {
-                write!(f, "power `{power}` has bad operation `{operation}`")
-            }
-            IntegrityError::EmptySet => write!(f, "origins set is empty (layer would be empty)"),
+            BadId(s) => write!(f, "invalid id `{s}` (must be lowercase [a-z0-9_.-]+)"),
+            DuplicateId(s) => write!(f, "duplicate id `{s}`"),
+            EmptyText { what, field } => write!(f, "{what} has empty `{field}` (must be non-empty plain text)"),
+            BadPowerType { power, ty } => write!(f, "power `{power}` type `{ty}` is not a registered Apoli factory"),
+            MissingRequiredField { power, ty, field } => write!(f, "power `{power}` (type `{ty}`) is missing required field `{field}`"),
+            BadAttribute { power, attribute } => write!(f, "power `{power}` targets non-allowlisted attribute `{attribute}`"),
+            BadOperation { power, operation } => write!(f, "power `{power}` has invalid operation `{operation}`"),
+            DanglingPowerRef { origin, power } => write!(f, "origin `{origin}` references power `{power}` which is neither emitted nor a shipped origins power"),
+            BadIcon { origin, icon } => write!(f, "origin `{origin}` icon `{icon}` is not a well-formed namespace:path"),
+            BadImpact { origin, impact } => write!(f, "origin `{origin}` impact {impact} out of range 0..=3"),
+            EmptySet => write!(f, "origins set is empty (layer would be empty)"),
         }
     }
 }
 
 impl std::error::Error for IntegrityError {}
 
+impl IntegrityError {
+    /// Stable machine kind (for the model-facing repair JSON).
+    pub fn kind(&self) -> &'static str {
+        use IntegrityError::*;
+        match self {
+            BadId(_) => "BadId",
+            DuplicateId(_) => "DuplicateId",
+            EmptyText { .. } => "EmptyText",
+            BadPowerType { .. } => "BadPowerType",
+            MissingRequiredField { .. } => "MissingRequiredField",
+            BadAttribute { .. } => "BadAttribute",
+            BadOperation { .. } => "BadOperation",
+            DanglingPowerRef { .. } => "DanglingPowerRef",
+            BadIcon { .. } => "BadIcon",
+            BadImpact { .. } => "BadImpact",
+            EmptySet => "EmptySet",
+        }
+    }
+
+    /// The remediation the model should apply. Co-located with the variant so
+    /// a failed proposal converges in one repair round, not three.
+    pub fn hint(&self) -> &'static str {
+        use IntegrityError::*;
+        match self {
+            BadId(_) => "ids must be lowercase [a-z0-9_.-]+ (no spaces/uppercase); they become the file name.",
+            DuplicateId(_) => "give every power and every origin a unique id.",
+            EmptyText { .. } => "name and description are plain non-empty strings (NOT a {\"text\":...} object).",
+            BadPowerType { .. } => "use only a `type` from the SAFE power list in the system prompt. For water-breathing/climbing/etc do NOT define a power — reference the shipped origins:<id> in the origin's `powers` instead.",
+            MissingRequiredField { .. } => "this SAFE type has a required body field — see the SAFE power list (e.g. apoli:attribute needs `modifier`, apoli:modify_falling needs `velocity`).",
+            BadAttribute { .. } => "an apoli:attribute power may only target the allowlisted vanilla attributes listed in the system prompt.",
+            BadOperation { .. } => "modifier `operation` must be exactly one of: addition, multiply_base, multiply_total.",
+            DanglingPowerRef { .. } => "every entry in an origin's `powers` must be either a power id you defined in this same call, or a shipped origins:<id> from the allowlist.",
+            BadIcon { .. } => "icon must be a real vanilla item id as namespace:path, e.g. minecraft:netherite_chestplate.",
+            BadImpact { .. } => "impact is an INTEGER 0,1,2,3 (0 none .. 3 high) — not a string.",
+            EmptySet => "produce at least one origin.",
+        }
+    }
+}
+
+/// The model-facing repair payload: `[{kind, where, why, hint}]`. Returned as
+/// the tool result so the next round's proposal converges fast.
+pub fn errors_to_json(errs: &[IntegrityError]) -> serde_json::Value {
+    use IntegrityError::*;
+    serde_json::Value::Array(
+        errs.iter()
+            .map(|e| {
+                let wher = match e {
+                    BadId(s) | DuplicateId(s) => s.clone(),
+                    EmptyText { what, field } => format!("{what}.{field}"),
+                    BadPowerType { power, .. }
+                    | MissingRequiredField { power, .. }
+                    | BadAttribute { power, .. }
+                    | BadOperation { power, .. } => format!("power `{power}`"),
+                    DanglingPowerRef { origin, power } => {
+                        format!("origin `{origin}` -> `{power}`")
+                    }
+                    BadIcon { origin, .. } | BadImpact { origin, .. } => {
+                        format!("origin `{origin}`")
+                    }
+                    EmptySet => "origins".to_string(),
+                };
+                json!({ "kind": e.kind(), "where": wher, "why": e.to_string(), "hint": e.hint() })
+            })
+            .collect(),
+    )
+}
+
+/// The model-facing catalog, generated from the SAME Rust constants the
+/// validator uses (so prompt and gate can never drift). Inlined into the
+/// progression system prompt — the model cannot read repo docs at inference.
+pub fn safe_catalog_prompt_section() -> String {
+    let mut s = String::new();
+    s.push_str("CUSTOM ORIGINS (only if the pack runs Origins). Call generate_origins ONCE with a set of 2-5 origins themed to THIS pack and the player's request. It is a SINGLE authored set (a second call REPLACES it; it does NOT accumulate like generate_quests). Hard rules:\n");
+    s.push_str("- `name` and `description` (on every origin AND power) are PLAIN STRINGS, never a {\"text\":...} object.\n");
+    s.push_str("- origin `impact` is an INTEGER 0-3 (0 none, 1 low, 2 medium, 3 high). `order` is an integer.\n");
+    s.push_str("- origin `icon` is a real vanilla item id, namespace:path (e.g. minecraft:netherite_chestplate).\n");
+    s.push_str("- An origin's `powers` entries are EITHER a power id you define in `powers` this call, OR a shipped origins:<id> (reference it, do NOT redefine it).\n");
+    s.push_str("- A power `type` MUST be one of these SAFE types (with its required body field):\n");
+    for st in SAFE_TYPES {
+        let req = if st.required.is_empty() {
+            "no required body".to_string()
+        } else {
+            format!("requires `{}`", st.required.join("`, `"))
+        };
+        s.push_str(&format!("    - {} ({req})\n", st.id));
+    }
+    s.push_str("- For built-in effects, REFERENCE a shipped power id (do NOT define one): ");
+    s.push_str(&SHIPPED_ORIGINS_POWERS.join(", "));
+    s.push_str("\n  (e.g. underwater breathing => put \"origins:water_breathing\" in the origin's powers; climbing => \"origins:climbing\").\n");
+    s.push_str(&format!(
+        "- apoli:attribute `modifier` shape: {{\"attribute\":<one of: {}>, \"operation\":<one of: {}>, \"value\":<number>, \"name\":<string>}}.\n",
+        ALLOWED_ATTRIBUTES.join(", "),
+        ALLOWED_OPERATIONS.join(", "),
+    ));
+    s.push_str("- modify_jump / modify_damage_taken `modifier` shape: {\"operation\":<op>, \"value\":<number>, \"name\":<string>}. modify_falling shape: {\"velocity\":<number>, \"take_fall_damage\":false}.\n");
+    s
+}
+
+fn is_valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-')
+        })
+}
+
+/// `namespace:path`, both segments lowercase `[a-z0-9_.-]`, path may contain
+/// `/`. (Minecraft resource-location rules.)
+fn is_resource_location(s: &str) -> bool {
+    let Some((ns, path)) = s.split_once(':') else {
+        return false;
+    };
+    !ns.is_empty()
+        && !path.is_empty()
+        && ns
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
+        && path
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-' | '/'))
+}
+
 // ---------------------------------------------------------------------------
-// Typed power constructors (the single source of truth for each shape)
+// Validation — the GATE. Collects EVERY failure (advisor: not first-only).
 // ---------------------------------------------------------------------------
 
-fn body(pairs: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+/// Validate the set; on success return the `Validated` token `emit` requires.
+pub fn validate(set: OriginsSet) -> Result<Validated, Vec<IntegrityError>> {
+    use std::collections::BTreeSet;
+    let mut errs: Vec<IntegrityError> = Vec::new();
+
+    // Powers: id/text/type/required-fields/modifier checks.
+    let mut seen_powers: BTreeSet<&str> = BTreeSet::new();
+    for p in &set.powers {
+        if !is_valid_id(&p.id) {
+            errs.push(IntegrityError::BadId(p.id.clone()));
+        }
+        if !seen_powers.insert(p.id.as_str()) {
+            errs.push(IntegrityError::DuplicateId(p.id.clone()));
+        }
+        if p.name.trim().is_empty() {
+            errs.push(IntegrityError::EmptyText { what: format!("power `{}`", p.id), field: "name" });
+        }
+        if p.description.trim().is_empty() {
+            errs.push(IntegrityError::EmptyText { what: format!("power `{}`", p.id), field: "description" });
+        }
+        let bare = bare_power_type(&p.power_type);
+        if !FULL_WHITELIST.contains(&bare) {
+            errs.push(IntegrityError::BadPowerType { power: p.id.clone(), ty: p.power_type.clone() });
+            continue; // unknown type: required-field check is meaningless
+        }
+        // SAFE-type required fields must be present.
+        if let Some(st) = safe_type(&p.power_type).or_else(|| safe_type(&format!("apoli:{bare}"))) {
+            for &req in st.required {
+                if !p.body.contains_key(req) {
+                    errs.push(IntegrityError::MissingRequiredField {
+                        power: p.id.clone(),
+                        ty: p.power_type.clone(),
+                        field: req,
+                    });
+                }
+            }
+        }
+        // Every modifier (single `modifier` or `modifiers[]`): valid
+        // operation; `apoli:attribute` modifiers also a valid attribute.
+        let is_attr = bare == "attribute";
+        let mut mods: Vec<&serde_json::Value> = Vec::new();
+        if let Some(m) = p.body.get("modifier") {
+            mods.push(m);
+        }
+        if let Some(serde_json::Value::Array(a)) = p.body.get("modifiers") {
+            mods.extend(a.iter());
+        }
+        for m in mods {
+            if let Some(op) = m.get("operation").and_then(|v| v.as_str()) {
+                if !ALLOWED_OPERATIONS.contains(&op) {
+                    errs.push(IntegrityError::BadOperation { power: p.id.clone(), operation: op.to_string() });
+                }
+            }
+            if is_attr {
+                if let Some(attr) = m.get("attribute").and_then(|v| v.as_str()) {
+                    if !ALLOWED_ATTRIBUTES.contains(&attr) {
+                        errs.push(IntegrityError::BadAttribute { power: p.id.clone(), attribute: attr.to_string() });
+                    }
+                }
+            }
+        }
+    }
+
+    // Origins: id/text/dangling-ref/icon/impact.
+    let mut seen_origins: BTreeSet<&str> = BTreeSet::new();
+    for o in &set.origins {
+        if !is_valid_id(&o.id) {
+            errs.push(IntegrityError::BadId(o.id.clone()));
+        }
+        if !seen_origins.insert(o.id.as_str()) {
+            errs.push(IntegrityError::DuplicateId(o.id.clone()));
+        }
+        if o.name.trim().is_empty() {
+            errs.push(IntegrityError::EmptyText { what: format!("origin `{}`", o.id), field: "name" });
+        }
+        if o.description.trim().is_empty() {
+            errs.push(IntegrityError::EmptyText { what: format!("origin `{}`", o.id), field: "description" });
+        }
+        for pid in &o.powers {
+            if classify_power_ref(pid, &seen_powers).is_none() {
+                errs.push(IntegrityError::DanglingPowerRef { origin: o.id.clone(), power: pid.clone() });
+            }
+        }
+        if !is_resource_location(&o.icon) {
+            errs.push(IntegrityError::BadIcon { origin: o.id.clone(), icon: o.icon.clone() });
+        }
+        if !(0..=3).contains(&o.impact) {
+            errs.push(IntegrityError::BadImpact { origin: o.id.clone(), impact: o.impact });
+        }
+    }
+
+    if set.origins.is_empty() {
+        errs.push(IntegrityError::EmptySet);
+    }
+
+    if errs.is_empty() {
+        Ok(Validated(set))
+    } else {
+        Err(errs)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Typed power constructors (used by `rescue_set`; single source of each shape)
+// ---------------------------------------------------------------------------
+
+fn obj(pairs: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     match pairs {
         serde_json::Value::Object(m) => m,
         _ => serde_json::Map::new(),
     }
 }
 
-/// `apoli:attribute` with a single modifier.
-fn power_attribute(
-    id: &str,
-    attribute: &str,
-    operation: &str,
-    value: f64,
-    modifier_name: &str,
-) -> Power {
+fn power_attribute(id: &str, name: &str, desc: &str, attribute: &str, operation: &str, value: f64, mod_name: &str) -> Power {
     Power {
-        id: id.to_string(),
-        power_type: "apoli:attribute".to_string(),
-        body: body(json!({
-            "modifier": {
-                "attribute": attribute,
-                "operation": operation,
-                "value": value,
-                "name": modifier_name,
-            }
-        })),
+        id: id.into(),
+        name: name.into(),
+        description: desc.into(),
+        power_type: "apoli:attribute".into(),
+        body: obj(json!({ "modifier": { "attribute": attribute, "operation": operation, "value": value, "name": mod_name } })),
     }
 }
 
-/// `apoli:night_vision` with a strength.
-fn power_night_vision(id: &str, strength: f64) -> Power {
+fn power_modifier(id: &str, name: &str, desc: &str, ty: &str, operation: &str, value: f64, mod_name: &str) -> Power {
     Power {
-        id: id.to_string(),
-        power_type: "apoli:night_vision".to_string(),
-        body: body(json!({ "strength": strength })),
+        id: id.into(),
+        name: name.into(),
+        description: desc.into(),
+        power_type: ty.into(),
+        body: obj(json!({ "modifier": { "operation": operation, "value": value, "name": mod_name } })),
     }
 }
 
-/// `apoli:water_breathing` (no fields).
-fn power_water_breathing(id: &str) -> Power {
+fn power_modify_falling(id: &str, name: &str, desc: &str, velocity: f64) -> Power {
     Power {
-        id: id.to_string(),
-        power_type: "apoli:water_breathing".to_string(),
-        body: serde_json::Map::new(),
+        id: id.into(),
+        name: name.into(),
+        description: desc.into(),
+        power_type: "apoli:modify_falling".into(),
+        body: obj(json!({ "velocity": velocity, "take_fall_damage": false })),
     }
 }
 
-/// `apoli:modify_falling` (slow-fall) — velocity + no fall damage.
-fn power_modify_falling(id: &str, velocity: f64, take_fall_damage: bool) -> Power {
-    Power {
-        id: id.to_string(),
-        power_type: "apoli:modify_falling".to_string(),
-        body: body(json!({
-            "velocity": velocity,
-            "take_fall_damage": take_fall_damage,
-        })),
-    }
+fn power_simple(id: &str, name: &str, desc: &str, ty: &str) -> Power {
+    Power { id: id.into(), name: name.into(), description: desc.into(), power_type: ty.into(), body: serde_json::Map::new() }
 }
 
-/// `apoli:climbing` (no fields).
-fn power_climbing(id: &str) -> Power {
+fn power_night_vision(id: &str, name: &str, desc: &str, strength: f64) -> Power {
     Power {
-        id: id.to_string(),
-        power_type: "apoli:climbing".to_string(),
-        body: serde_json::Map::new(),
-    }
-}
-
-/// `apoli:modify_jump` with a single modifier.
-fn power_modify_jump(id: &str, operation: &str, value: f64, modifier_name: &str) -> Power {
-    Power {
-        id: id.to_string(),
-        power_type: "apoli:modify_jump".to_string(),
-        body: body(json!({
-            "modifier": {
-                "operation": operation,
-                "value": value,
-                "name": modifier_name,
-            }
-        })),
-    }
-}
-
-/// `apoli:modify_damage_taken` with a single modifier.
-fn power_modify_damage_taken(
-    id: &str,
-    operation: &str,
-    value: f64,
-    modifier_name: &str,
-) -> Power {
-    Power {
-        id: id.to_string(),
-        power_type: "apoli:modify_damage_taken".to_string(),
-        body: body(json!({
-            "modifier": {
-                "operation": operation,
-                "value": value,
-                "name": modifier_name,
-            }
-        })),
+        id: id.into(),
+        name: name.into(),
+        description: desc.into(),
+        power_type: "apoli:night_vision".into(),
+        body: obj(json!({ "strength": strength })),
     }
 }
 
 // ---------------------------------------------------------------------------
-// Curated v1 set: 3 starter origins spanning 7 catalog power types
+// Deterministic RESCUE set — fixes an already-broken instance with NO LLM.
+// Schema-correct: plain-string names, integer impact, valid catalog types,
+// Survivalist gets water-breathing by REFERENCING the shipped power.
 // ---------------------------------------------------------------------------
 
-/// The curated v1 starter set.
-///
-/// - Tank — `apoli:attribute` max_health + `apoli:attribute` armor +
-///   `apoli:modify_damage_taken` (icon netherite_chestplate, high impact).
-/// - Mobility — `apoli:modify_jump` + `apoli:modify_falling` (slow-fall) +
-///   `apoli:climbing` (icon feather, medium impact).
-/// - Survivalist — `apoli:night_vision` + `apoli:water_breathing` +
-///   `apoli:attribute` movement_speed (icon torch, low impact).
-///
-/// Distinct power ids (one file per power, 9 total); union of types =
-/// {attribute, modify_damage_taken, modify_jump, modify_falling, climbing,
-/// night_vision, water_breathing} = 7 of the 7-entry catalog. Deterministic.
-pub fn build_v1_set() -> OriginsSet {
+pub fn rescue_set() -> OriginsSet {
     let powers = vec![
-        // Tank
-        power_attribute(
-            "tank_max_health",
-            "minecraft:generic.max_health",
-            "addition",
-            6.0,
-            "Anvil Tank Max Health",
-        ),
-        power_attribute(
-            "tank_armor",
-            "minecraft:generic.armor",
-            "addition",
-            4.0,
-            "Anvil Tank Armor",
-        ),
-        power_modify_damage_taken(
-            "tank_resilience",
-            "multiply_base",
-            -0.25,
-            "Anvil Tank Resilience",
-        ),
-        // Mobility
-        power_modify_jump("mobility_high_jump", "multiply_base", 0.5, "Anvil High Jump"),
-        power_modify_falling("mobility_slow_fall", 0.04, false),
-        power_climbing("mobility_climbing"),
-        // Survivalist
-        power_night_vision("survivalist_night_vision", 1.0),
-        power_water_breathing("survivalist_water_breathing"),
-        power_attribute(
-            "survivalist_swift",
-            "minecraft:generic.movement_speed",
-            "multiply_base",
-            0.15,
-            "Anvil Survivalist Swiftness",
-        ),
+        power_attribute("tank_vitality", "Vitality", "Your maximum health is greatly increased.", "minecraft:generic.max_health", "addition", 6.0, "Anvil Tank Vitality"),
+        power_attribute("tank_plating", "Plating", "Permanent natural armor.", "minecraft:generic.armor", "addition", 4.0, "Anvil Tank Plating"),
+        power_modifier("tank_resilience", "Resilience", "You take less incoming damage.", "apoli:modify_damage_taken", "multiply_base", -0.25, "Anvil Tank Resilience"),
+        power_modifier("mobility_spring_step", "Spring Step", "You jump notably higher.", "apoli:modify_jump", "multiply_base", 0.5, "Anvil Spring Step"),
+        power_modify_falling("mobility_drift", "Drift", "You fall slowly and take no fall damage.", 0.04),
+        power_simple("mobility_wallcling", "Wall Cling", "You can climb any wall.", "apoli:climbing"),
+        power_night_vision("survivalist_darksight", "Dark Sight", "You see clearly in the dark.", 1.0),
+        power_attribute("survivalist_fleetfoot", "Fleet Foot", "You move faster on foot.", "minecraft:generic.movement_speed", "multiply_base", 0.15, "Anvil Fleet Foot"),
     ];
 
     let origins = vec![
         Origin {
-            id: "tank".to_string(),
-            powers: vec![
-                "tank_max_health".to_string(),
-                "tank_armor".to_string(),
-                "tank_resilience".to_string(),
-            ],
-            icon: "minecraft:netherite_chestplate".to_string(),
-            impact: "high".to_string(),
+            id: "tank".into(),
+            name: "Tank".into(),
+            description: "Built like a wall — extra health, natural armor, and reduced incoming damage.".into(),
+            powers: vec!["tank_vitality".into(), "tank_plating".into(), "tank_resilience".into()],
+            icon: "minecraft:netherite_chestplate".into(),
+            impact: 3,
             order: 0,
         },
         Origin {
-            id: "mobility".to_string(),
-            powers: vec![
-                "mobility_high_jump".to_string(),
-                "mobility_slow_fall".to_string(),
-                "mobility_climbing".to_string(),
-            ],
-            icon: "minecraft:feather".to_string(),
-            impact: "medium".to_string(),
+            id: "mobility".into(),
+            name: "Mobility".into(),
+            description: "Light on your feet — higher jumps, slow falling, and wall-climbing.".into(),
+            powers: vec!["mobility_spring_step".into(), "mobility_drift".into(), "mobility_wallcling".into()],
+            icon: "minecraft:feather".into(),
+            impact: 2,
             order: 1,
         },
         Origin {
-            id: "survivalist".to_string(),
+            id: "survivalist".into(),
+            name: "Survivalist".into(),
+            description: "At home in the wild — night vision, swiftness, and the ability to breathe underwater.".into(),
+            // The last entry is a SHIPPED Origins power (no file emitted).
             powers: vec![
-                "survivalist_night_vision".to_string(),
-                "survivalist_water_breathing".to_string(),
-                "survivalist_swift".to_string(),
+                "survivalist_darksight".into(),
+                "survivalist_fleetfoot".into(),
+                "origins:water_breathing".into(),
             ],
-            icon: "minecraft:torch".to_string(),
-            impact: "low".to_string(),
+            icon: "minecraft:torch".into(),
+            impact: 1,
             order: 2,
         },
     ];
@@ -421,311 +667,107 @@ pub fn build_v1_set() -> OriginsSet {
 }
 
 // ---------------------------------------------------------------------------
-// Referential-integrity validation (the negative-test seam)
+// Deterministic serializer — only accepts a `Validated` set.
 // ---------------------------------------------------------------------------
 
-/// True iff `id` is a non-empty lowercase `[a-z0-9_.-]+` token (equal to its
-/// filename when emitted).
-fn is_valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
-}
-
-/// Validate the set's referential integrity BEFORE any emission. Stable issue
-/// order: powers first (id, type, attribute/operation), then origins (id,
-/// dangling refs, icon, impact), then the emptiness check.
-pub fn validate(set: &OriginsSet) -> Result<(), IntegrityError> {
-    use std::collections::BTreeSet;
-
-    // Powers: id shape, duplicates, catalog type, attribute/operation bodies.
-    let mut seen_powers: BTreeSet<&str> = BTreeSet::new();
-    for p in &set.powers {
-        if !is_valid_id(&p.id) {
-            return Err(IntegrityError::BadId(p.id.clone()));
-        }
-        if !seen_powers.insert(p.id.as_str()) {
-            return Err(IntegrityError::DuplicateId(p.id.clone()));
-        }
-        if !ALLOWED_POWER_TYPES.contains(&p.power_type.as_str()) {
-            return Err(IntegrityError::BadPowerType {
-                power: p.id.clone(),
-                ty: p.power_type.clone(),
-            });
-        }
-        // Every modifier (single `modifier` or `modifiers[]`) must carry a
-        // valid operation; `apoli:attribute` modifiers also a valid attribute.
-        let is_attr = p.power_type == "apoli:attribute";
-        let mut mods: Vec<&serde_json::Value> = Vec::new();
-        if let Some(m) = p.body.get("modifier") {
-            mods.push(m);
-        }
-        if let Some(serde_json::Value::Array(a)) = p.body.get("modifiers") {
-            for m in a {
-                mods.push(m);
-            }
-        }
-        for m in mods {
-            if let Some(op) = m.get("operation").and_then(|v| v.as_str()) {
-                if !ALLOWED_OPERATIONS.contains(&op) {
-                    return Err(IntegrityError::BadOperation {
-                        power: p.id.clone(),
-                        operation: op.to_string(),
-                    });
-                }
-            }
-            if is_attr {
-                if let Some(attr) = m.get("attribute").and_then(|v| v.as_str()) {
-                    if !ALLOWED_ATTRIBUTES.contains(&attr) {
-                        return Err(IntegrityError::BadAttribute {
-                            power: p.id.clone(),
-                            attribute: attr.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Origins: id shape, duplicates, dangling power refs, icon, impact.
-    let mut seen_origins: BTreeSet<&str> = BTreeSet::new();
-    for o in &set.origins {
-        if !is_valid_id(&o.id) {
-            return Err(IntegrityError::BadId(o.id.clone()));
-        }
-        if !seen_origins.insert(o.id.as_str()) {
-            return Err(IntegrityError::DuplicateId(o.id.clone()));
-        }
-        for pid in &o.powers {
-            if !seen_powers.contains(pid.as_str()) {
-                return Err(IntegrityError::DanglingPowerRef {
-                    origin: o.id.clone(),
-                    power: pid.clone(),
-                });
-            }
-        }
-        if !ALLOWED_ICONS.contains(&o.icon.as_str()) {
-            return Err(IntegrityError::BadIcon {
-                origin: o.id.clone(),
-                icon: o.icon.clone(),
-            });
-        }
-        if !ALLOWED_IMPACTS.contains(&o.impact.as_str()) {
-            return Err(IntegrityError::BadImpact {
-                origin: o.id.clone(),
-                impact: o.impact.clone(),
-            });
-        }
-    }
-
-    if set.origins.is_empty() {
-        return Err(IntegrityError::EmptySet);
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Deterministic datapack serializer
-// ---------------------------------------------------------------------------
-
-fn lang_name_key(ns: &str, kind: &str, id: &str) -> String {
-    // origins use `origin.<ns>.<id>.name`; powers use `power.<ns>.<id>.name`.
-    format!("{kind}.{ns}.{id}.name")
-}
-
-fn lang_desc_key(ns: &str, kind: &str, id: &str) -> String {
-    format!("{kind}.{ns}.{id}.description")
-}
-
-/// Humanize a bare id (`tank_max_health` -> `Tank Max Health`) for readable
-/// fallback lang text.
-fn humanize(id: &str) -> String {
-    id.split(|c| c == '_' || c == '.' || c == '-')
-        .filter(|s| !s.is_empty())
-        .map(|w| {
-            let mut cs = w.chars();
-            match cs.next() {
-                Some(f) => f.to_uppercase().collect::<String>() + cs.as_str(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-// Single source of truth for each in-game-readable string. Each helper is
-// called ONCE per origin/power in `emit`; its return value feeds BOTH the
-// literal `{"text": ...}` Component (what renders in-game with no resource
-// pack) AND the `assets/<ns>/lang/en_us.json` value (kept for future
-// localization), so the two can never drift.
-
-/// Readable display name for a power (same string as its `en_us.json` value).
-fn power_name_text(id: &str) -> String {
-    humanize(id)
-}
-
-/// Readable description for a power (same string as its `en_us.json` value).
-fn power_desc_text(id: &str) -> String {
-    format!("{} power.", humanize(id))
-}
-
-/// Readable display name for an origin (same string as its `en_us.json` value).
-fn origin_name_text(id: &str) -> String {
-    humanize(id)
-}
-
-/// Readable description for an origin (same string as its `en_us.json` value).
-fn origin_desc_text(id: &str, impact: &str) -> String {
-    format!("The {} origin. Impact: {}.", humanize(id), impact)
-}
-
-/// Serialize a JSON value with the existing engine idiom: pretty + trailing
-/// newline (matches `recipe.rs`/`content.rs`; serde_json without
-/// `preserve_order` sorts keys, so output is deterministic).
 fn to_file(v: &serde_json::Value) -> String {
     let mut s = serde_json::to_string_pretty(v).unwrap_or_else(|_| "{}".to_string());
     s.push('\n');
     s
 }
 
-/// Build the full deterministic Origins datapack: `Vec<(relative path, file
-/// content)>`. Emission order is stable: `pack.mcmeta`, then powers sorted by
-/// id, then origins sorted by id, then the layer file, then `en_us.json`.
-///
-/// The curated v1 set is invariantly valid, so `validate` here is an honest
-/// assertion (a panic would mean the v1 set itself is broken — a build bug,
-/// caught by the integrity test).
-pub fn build_origins_datapack(namespace: &str) -> Vec<(String, String)> {
-    let set = build_v1_set();
-    validate(&set).expect("curated v1 origins set is invariantly valid");
-    emit(&set, namespace)
-}
-
-/// Pure emission of a PRE-VALIDATED set (split out so determinism is testable
-/// without rebuilding v1). Callers other than tests should use
-/// `build_origins_datapack`.
-fn emit(set: &OriginsSet, ns: &str) -> Vec<(String, String)> {
+/// Emit the datapack from a PRE-VALIDATED set. `name`/`description` are plain
+/// strings; `impact` a number; the layer appends with `replace:false`; only
+/// `Local` powers get a file (a `Shipped` ref is just listed in the origin).
+fn emit(v: &Validated, ns: &str) -> Vec<(String, String)> {
+    use std::collections::BTreeSet;
+    let set = &v.0;
     let mut out: Vec<(String, String)> = Vec::new();
-    let mut lang = serde_json::Map::new();
 
-    // 1. pack.mcmeta — MANDATORY, pack_format is a NUMBER (15 for 1.20.1).
-    let mcmeta = json!({
-        "pack": {
-            "pack_format": PACK_FORMAT_1_20,
-            "description": "Anvil custom origins",
-        }
-    });
-    out.push((format!("{ROOT}/pack.mcmeta"), to_file(&mcmeta)));
+    // pack.mcmeta
+    out.push((
+        format!("{ROOT}/pack.mcmeta"),
+        to_file(&json!({ "pack": { "pack_format": PACK_FORMAT_1_20, "description": "Anvil custom origins" } })),
+    ));
 
-    // 2. Powers, sorted by id for stable order.
+    let emitted_ids: BTreeSet<&str> = set.powers.iter().map(|p| p.id.as_str()).collect();
+
+    // Powers (Local only), sorted by id.
     let mut powers: Vec<&Power> = set.powers.iter().collect();
     powers.sort_by(|a, b| a.id.cmp(&b.id));
     for p in powers {
-        let name_key = lang_name_key(ns, "power", &p.id);
-        let desc_key = lang_desc_key(ns, "power", &p.id);
-        // Single-sourced readable strings: the SAME values feed the literal
-        // `{"text": ...}` Component below AND the en_us.json entries.
-        let name_text = power_name_text(&p.id);
-        let desc_text = power_desc_text(&p.id);
-
-        // type + literal name/description Components + the type-specific body.
-        // `name`/`description` are emitted as Minecraft text Component OBJECTS
-        // (`{"text": ...}`), not bare translation-key strings: Origins' Calio
-        // codec accepts a Component, so these render in-game with NO client
-        // resource pack. Build through a Map so the shape is the single source
-        // of truth and serde sorts keys deterministically.
-        let mut obj = serde_json::Map::new();
-        obj.insert("type".to_string(), json!(p.power_type));
-        obj.insert("name".to_string(), json!({ "text": name_text }));
-        obj.insert("description".to_string(), json!({ "text": desc_text }));
-        for (k, v) in &p.body {
-            obj.insert(k.clone(), v.clone());
+        let mut o = serde_json::Map::new();
+        o.insert("type".into(), json!(p.power_type));
+        o.insert("name".into(), json!(p.name)); // PLAIN STRING
+        o.insert("description".into(), json!(p.description)); // PLAIN STRING
+        for (k, val) in &p.body {
+            o.insert(k.clone(), val.clone());
         }
         out.push((
             format!("{ROOT}/data/{ns}/powers/{}.json", p.id),
-            to_file(&serde_json::Value::Object(obj)),
+            to_file(&serde_json::Value::Object(o)),
         ));
-
-        // Lang file kept (harmless; enables future localization) — same
-        // single-sourced strings, so the two can never drift.
-        lang.insert(name_key, json!(name_text));
-        lang.insert(desc_key, json!(desc_text));
     }
 
-    // 3. Origins, sorted by id for stable order.
+    // Origins, sorted by id.
     let mut origins: Vec<&Origin> = set.origins.iter().collect();
     origins.sort_by(|a, b| a.id.cmp(&b.id));
-    for o in &origins {
-        let name_key = lang_name_key(ns, "origin", &o.id);
-        let desc_key = lang_desc_key(ns, "origin", &o.id);
-        // Single-sourced readable strings: the SAME values feed the literal
-        // `{"text": ...}` Component below AND the en_us.json entries.
-        let name_text = origin_name_text(&o.id);
-        let desc_text = origin_desc_text(&o.id, &o.impact);
-
-        let power_refs: Vec<String> =
-            o.powers.iter().map(|p| format!("{ns}:{p}")).collect();
-
-        // `name`/`description` are emitted as Minecraft text Component OBJECTS
-        // (`{"text": ...}`), not bare translation-key strings, so they render
-        // in-game with NO client resource pack (Calio's codec accepts a
-        // Component).
-        let v = json!({
-            "powers": power_refs,
-            "icon": { "item": o.icon },
-            "impact": o.impact,
-            "order": o.order,
-            "name": { "text": name_text },
-            "description": { "text": desc_text },
-        });
+    for org in &origins {
+        let power_refs: Vec<String> = org
+            .powers
+            .iter()
+            .map(|pid| match classify_power_ref(pid, &emitted_ids) {
+                Some(PowerRef::Shipped(s)) => s.to_string(),
+                Some(PowerRef::Local(s)) => format!("{ns}:{s}"),
+                // unreachable: validation guarantees classification.
+                None => format!("{ns}:{pid}"),
+            })
+            .collect();
         out.push((
-            format!("{ROOT}/data/{ns}/origins/{}.json", o.id),
-            to_file(&v),
+            format!("{ROOT}/data/{ns}/origins/{}.json", org.id),
+            to_file(&json!({
+                "powers": power_refs,
+                "icon": { "item": org.icon },
+                "impact": org.impact,
+                "order": org.order,
+                "name": org.name,
+                "description": org.description,
+            })),
         ));
-
-        // Lang file kept (harmless; enables future localization) — same
-        // single-sourced strings, so the two can never drift.
-        lang.insert(name_key, json!(name_text));
-        lang.insert(desc_key, json!(desc_text));
     }
 
-    // 4. The layer file — fixed namespace-INDEPENDENT path, NO `replace` key
-    //    (the loader merges/appends across packs; `replace:true` would wipe
-    //    the 10 stock origins). Lists every emitted origin in sorted order.
+    // Layer: append to the stock chooser (replace:false).
     let layer_origins: Vec<String> =
         origins.iter().map(|o| format!("{ns}:{}", o.id)).collect();
-    let layer = json!({ "origins": layer_origins });
     out.push((
         format!("{ROOT}/{LAYER_PATH_SUFFIX}"),
-        to_file(&layer),
-    ));
-
-    // 5. en_us.json — REQUIRED; maps every emitted name/description key to
-    //    readable text (serde sorts keys, so this is deterministic).
-    out.push((
-        format!("{ROOT}/assets/{ns}/lang/en_us.json"),
-        to_file(&serde_json::Value::Object(lang)),
+        to_file(&json!({ "replace": false, "origins": layer_origins })),
     ));
 
     out
 }
 
-// ---------------------------------------------------------------------------
-// Instance writer
-// ---------------------------------------------------------------------------
+/// Build the deterministic rescue datapack: `rescue_set` -> `validate` ->
+/// `emit`. The rescue set is invariantly valid, so a validation failure here
+/// is a build bug (caught by `rescue_set_validates`).
+pub fn build_origins_datapack(namespace: &str) -> Vec<(String, String)> {
+    let v = validate(rescue_set()).expect("rescue origins set is invariantly valid");
+    emit(&v, namespace)
+}
 
-/// Write the v1 Origins datapack under `instance_dir` (mirrors
-/// `quest::write_quests`: `create_dir_all` the instance dir, then per
-/// (rel, contents) `create_dir_all` the parent and `fs::write`). The datapack
-/// lands at `<instance>/config/openloader/data/anvil-origins/**`, a sibling of
-/// the recipe/content datapacks.
-pub fn write_origins_datapack(instance_dir: &Path, namespace: &str) -> anyhow::Result<()> {
+/// Prune any prior `anvil-origins` datapack, then write `files`. A stale file
+/// from an earlier (broken) emit would otherwise still be loaded by Apoli and
+/// still be rejected in-game — regeneration must fully REPLACE, not overlay.
+/// Shared by the rescue and the model-authored paths.
+fn write_files(instance_dir: &Path, files: Vec<(String, String)>) -> anyhow::Result<()> {
     std::fs::create_dir_all(instance_dir)
         .with_context(|| format!("creating instance dir {}", instance_dir.display()))?;
-
-    for (rel, contents) in build_origins_datapack(namespace) {
+    let root = instance_dir.join(ROOT);
+    if root.exists() {
+        std::fs::remove_dir_all(&root)
+            .with_context(|| format!("pruning stale {}", root.display()))?;
+    }
+    for (rel, contents) in files {
         let path = instance_dir.join(&rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -737,418 +779,364 @@ pub fn write_origins_datapack(instance_dir: &Path, namespace: &str) -> anyhow::R
     Ok(())
 }
 
+/// Write the deterministic RESCUE datapack (no LLM) — used for already-broken
+/// instances and as the fallback when the model did not author origins.
+pub fn write_origins_datapack(instance_dir: &Path, namespace: &str) -> anyhow::Result<()> {
+    write_files(instance_dir, build_origins_datapack(namespace))
+}
+
+/// Write a MODEL-AUTHORED, already-`Validated` origin set (the
+/// `tool_generate_origins` path). Same prune-then-write semantics.
+pub fn write_validated_origins(
+    instance_dir: &Path,
+    namespace: &str,
+    v: &Validated,
+) -> anyhow::Result<()> {
+    write_files(instance_dir, emit(v, namespace))
+}
+
 // ---------------------------------------------------------------------------
-// Tests — REAL codec-shape parsing ("would the game load this")
+// Tests — REAL: jar-grounded catalog checks + emitted-shape + the exact
+// historical-failure regressions. (The deleted tests asserted the BUG.)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::Value;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Read;
 
     const NS: &str = "anvil";
 
-    /// Index emitted files by relative path for lookup.
     fn index(files: &[(String, String)]) -> BTreeMap<String, String> {
         let mut m = BTreeMap::new();
         for (p, c) in files {
-            assert!(
-                m.insert(p.clone(), c.clone()).is_none(),
-                "duplicate emitted path {p}"
-            );
+            assert!(m.insert(p.clone(), c.clone()).is_none(), "dup path {p}");
         }
         m
     }
-
     fn parse(files: &BTreeMap<String, String>, path: &str) -> Value {
-        let raw = files
-            .get(path)
-            .unwrap_or_else(|| panic!("expected emitted file {path}"));
-        assert!(
-            raw.ends_with('\n'),
-            "file {path} must end with a trailing newline (engine idiom)"
-        );
-        serde_json::from_str(raw).unwrap_or_else(|e| panic!("file {path} must parse: {e}"))
+        let raw = files.get(path).unwrap_or_else(|| panic!("missing {path}"));
+        assert!(raw.ends_with('\n'), "{path} must end with newline");
+        serde_json::from_str(raw).unwrap_or_else(|e| panic!("{path} must parse: {e}"))
+    }
+    fn fixture(name: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/real")
+            .join(name)
+    }
+    /// Filenames (stem) of `data/origins/powers/*.json` inside the Origins jar.
+    fn origins_jar_shipped_power_ids() -> BTreeSet<String> {
+        let f = std::fs::File::open(fixture("origins-1.10.2.jar"))
+            .expect("committed origins-1.10.2.jar fixture");
+        let mut z = zip::ZipArchive::new(f).expect("origins jar is a zip");
+        let mut ids = BTreeSet::new();
+        for i in 0..z.len() {
+            let e = z.by_index(i).unwrap();
+            let n = e.name().to_string();
+            if let Some(rest) = n.strip_prefix("data/origins/powers/") {
+                if let Some(stem) = rest.strip_suffix(".json") {
+                    if !stem.contains('/') {
+                        ids.insert(format!("origins:{stem}"));
+                    }
+                }
+            }
+        }
+        ids
+    }
+    /// The `"type"` of every stock `data/origins/powers/*.json` (bare id).
+    fn origins_jar_stock_power_types() -> BTreeSet<String> {
+        let f = std::fs::File::open(fixture("origins-1.10.2.jar")).unwrap();
+        let mut z = zip::ZipArchive::new(f).unwrap();
+        let mut tys = BTreeSet::new();
+        for i in 0..z.len() {
+            let mut e = z.by_index(i).unwrap();
+            let n = e.name().to_string();
+            if n.starts_with("data/origins/powers/") && n.ends_with(".json") {
+                let mut s = String::new();
+                if e.read_to_string(&mut s).is_ok() {
+                    if let Ok(v) = serde_json::from_str::<Value>(&s) {
+                        if let Some(t) = v.get("type").and_then(|t| t.as_str()) {
+                            tys.insert(bare_power_type(t).to_string());
+                        }
+                    }
+                }
+            }
+        }
+        tys
     }
 
-    // (1) pack.mcmeta parses and pack_format == 15 (a NUMBER).
+    // --- Jar-grounded catalog checks: the catalog cannot silently drift. ---
+
     #[test]
-    fn origins_pack_mcmeta_format_15() {
-        let files = index(&build_origins_datapack(NS));
-        let mc = parse(&files, &format!("{ROOT}/pack.mcmeta"));
-        assert_eq!(mc["pack"]["pack_format"], 15);
-        assert!(
-            mc["pack"]["pack_format"].is_i64(),
-            "pack_format must be a number, not a string"
-        );
-        assert!(mc["pack"]["description"].is_string());
-    }
-
-    // (2) Layer file is at exactly data/origins/origin_layers/origin.json,
-    //     parses, references every emitted origin, and has NO `replace` key.
-    #[test]
-    fn origins_layer_file_exact_path_no_replace() {
-        let files = index(&build_origins_datapack(NS));
-        let layer_path = format!("{ROOT}/data/origins/origin_layers/origin.json");
-        let layer = parse(&files, &layer_path);
-
-        // NO `replace` key (would wipe the 10 stock origins).
-        assert!(
-            layer.get("replace").is_none(),
-            "layer file must NOT carry a `replace` key (loader merges/appends)"
-        );
-
-        // Collect every emitted origin id from the actual origin files.
-        let emitted_origins: Vec<String> = files
-            .keys()
-            .filter_map(|p| {
-                p.strip_prefix(&format!("{ROOT}/data/{NS}/origins/"))
-                    .and_then(|s| s.strip_suffix(".json"))
-                    .map(|s| format!("{NS}:{s}"))
-            })
-            .collect();
-        assert!(!emitted_origins.is_empty(), "expected emitted origins");
-
-        let listed: Vec<String> = layer["origins"]
-            .as_array()
-            .expect("layer `origins` must be an array")
+    fn shipped_powers_subset_of_origins_jar() {
+        let real = origins_jar_shipped_power_ids();
+        let missing: Vec<_> = SHIPPED_ORIGINS_POWERS
             .iter()
-            .map(|v| v.as_str().expect("origin ref must be a string").to_string())
-            .collect();
-
-        for o in &emitted_origins {
-            assert!(
-                listed.contains(o),
-                "layer must reference emitted origin {o}; layer lists {listed:?}"
-            );
-        }
-        assert_eq!(
-            listed.len(),
-            emitted_origins.len(),
-            "layer must list exactly the emitted origins (no extras/missing)"
-        );
-    }
-
-    // (3) Every emitted origin file parses; impact is valid; icon resolves to
-    //     a non-empty item id; every powers[] entry has a matching emitted
-    //     power file.
-    #[test]
-    fn origins_files_valid_and_powers_resolve() {
-        let files = index(&build_origins_datapack(NS));
-
-        let origin_paths: Vec<String> = files
-            .keys()
-            .filter(|p| {
-                p.starts_with(&format!("{ROOT}/data/{NS}/origins/")) && p.ends_with(".json")
-            })
-            .cloned()
-            .collect();
-        assert!(!origin_paths.is_empty(), "expected >= 1 origin file");
-
-        for op in &origin_paths {
-            let o = parse(&files, op);
-
-            // impact ∈ {none,low,medium,high}
-            let impact = o["impact"].as_str().expect("origin impact must be a string");
-            assert!(
-                ALLOWED_IMPACTS.contains(&impact),
-                "origin {op} impact `{impact}` not in {ALLOWED_IMPACTS:?}"
-            );
-
-            // icon resolves to a non-empty item id (object {item:..} form).
-            let icon = o["icon"]["item"]
-                .as_str()
-                .expect("origin icon must be {\"item\":\"<id>\"}");
-            assert!(!icon.is_empty(), "origin {op} icon item is empty");
-            assert!(
-                icon.starts_with("minecraft:"),
-                "origin {op} icon `{icon}` must be a real vanilla item id"
-            );
-
-            // every powers[] entry -> matching emitted power file.
-            let powers = o["powers"].as_array().expect("origin powers must be array");
-            assert!(!powers.is_empty(), "origin {op} must grant >= 1 power");
-            for pr in powers {
-                let pref = pr.as_str().expect("power ref must be a string");
-                let bare = pref
-                    .strip_prefix(&format!("{NS}:"))
-                    .unwrap_or_else(|| panic!("power ref {pref} must be {NS}-namespaced"));
-                let expected = format!("{ROOT}/data/{NS}/powers/{bare}.json");
-                assert!(
-                    files.contains_key(&expected),
-                    "origin {op} references power `{pref}` but {expected} was not emitted"
-                );
-            }
-        }
-    }
-
-    // (4) Every emitted power file parses; type is a catalog id.
-    #[test]
-    fn origins_power_files_have_catalog_type() {
-        let files = index(&build_origins_datapack(NS));
-        let power_paths: Vec<String> = files
-            .keys()
-            .filter(|p| {
-                p.starts_with(&format!("{ROOT}/data/{NS}/powers/")) && p.ends_with(".json")
-            })
-            .cloned()
-            .collect();
-        assert!(power_paths.len() >= 7, "expected >= 7 power files (v1 catalog span)");
-
-        let mut seen_types = std::collections::BTreeSet::new();
-        for pp in &power_paths {
-            let p = parse(&files, pp);
-            let ty = p["type"].as_str().expect("power type must be a string");
-            assert!(
-                ALLOWED_POWER_TYPES.contains(&ty),
-                "power {pp} type `{ty}` not in catalog {ALLOWED_POWER_TYPES:?}"
-            );
-            // filename must equal the bare id (id == filename invariant).
-            let bare = pp
-                .strip_prefix(&format!("{ROOT}/data/{NS}/powers/"))
-                .and_then(|s| s.strip_suffix(".json"))
-                .unwrap();
-            assert!(is_valid_id(bare), "power filename `{bare}` is not a valid id");
-            seen_types.insert(ty.to_string());
-        }
-        // v1 spans 5-7 distinct catalog types.
-        assert!(
-            (5..=7).contains(&seen_types.len()),
-            "v1 must span 5-7 distinct catalog power types, spans {}",
-            seen_types.len()
-        );
-    }
-
-    // (5) Every emitted origin/power still has BOTH its name + description
-    //     keys defined (non-empty) in assets/<ns>/lang/en_us.json. The lang
-    //     file is still emitted (for future localization) even though the JSON
-    //     now carries literal Components, so the key is derived from the file
-    //     path (origin/power id), not from the now-object `name` field.
-    #[test]
-    fn origins_every_lang_key_is_defined() {
-        let files = index(&build_origins_datapack(NS));
-        let lang = parse(&files, &format!("{ROOT}/assets/{NS}/lang/en_us.json"));
-        let lang_obj = lang.as_object().expect("en_us.json must be an object");
-
-        let mut referenced: Vec<String> = Vec::new();
-        for path in files.keys() {
-            if !path.ends_with(".json") {
-                continue;
-            }
-            let kind_id = if let Some(s) =
-                path.strip_prefix(&format!("{ROOT}/data/{NS}/origins/"))
-            {
-                s.strip_suffix(".json").map(|id| ("origin", id))
-            } else if let Some(s) =
-                path.strip_prefix(&format!("{ROOT}/data/{NS}/powers/"))
-            {
-                s.strip_suffix(".json").map(|id| ("power", id))
-            } else {
-                None
-            };
-            if let Some((kind, id)) = kind_id {
-                referenced.push(lang_name_key(NS, kind, id));
-                referenced.push(lang_desc_key(NS, kind, id));
-            }
-        }
-        assert!(!referenced.is_empty(), "expected referenced lang keys");
-
-        for key in &referenced {
-            assert!(
-                lang_obj.contains_key(key),
-                "lang key `{key}` referenced but missing from en_us.json"
-            );
-            assert!(
-                lang_obj[key].as_str().map(|s| !s.is_empty()).unwrap_or(false),
-                "lang key `{key}` maps to empty/non-string text"
-            );
-        }
-    }
-
-    // (5b) The in-game-readable invariant: every emitted origin/power file
-    //      emits `name` AND `description` as a literal Minecraft text
-    //      Component OBJECT (`{"text": "<non-empty>"}`), NOT a bare
-    //      translation-key string — so they render with NO client resource
-    //      pack. (The lang file is still emitted, asserted by test (5).)
-    #[test]
-    fn origins_name_and_description_are_literal_components() {
-        let files = index(&build_origins_datapack(NS));
-
-        let json_paths: Vec<String> = files
-            .keys()
-            .filter(|p| {
-                (p.starts_with(&format!("{ROOT}/data/{NS}/origins/"))
-                    || p.starts_with(&format!("{ROOT}/data/{NS}/powers/")))
-                    && p.ends_with(".json")
-            })
-            .cloned()
+            .filter(|id| !real.contains(**id))
             .collect();
         assert!(
-            !json_paths.is_empty(),
-            "expected >= 1 origin/power file to assert against"
+            missing.is_empty(),
+            "SHIPPED_ORIGINS_POWERS not in the Origins jar: {missing:?}"
         );
+    }
 
-        for path in &json_paths {
-            let v = parse(&files, path);
-            for field in ["name", "description"] {
-                let f = &v[field];
-                // Explicitly NOT a bare JSON string.
+    #[test]
+    fn stock_power_types_are_all_in_full_whitelist() {
+        // Every power type Origins' OWN stock content uses is a real Apoli
+        // factory; if our FULL_WHITELIST is missing one, it is wrong.
+        let stock = origins_jar_stock_power_types();
+        assert!(!stock.is_empty(), "expected stock origins powers in jar");
+        let wl: BTreeSet<&str> = FULL_WHITELIST.iter().copied().collect();
+        let missing: Vec<_> = stock.iter().filter(|t| !wl.contains(t.as_str())).collect();
+        assert!(
+            missing.is_empty(),
+            "FULL_WHITELIST missing types Origins' own stock powers use: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn historical_bug_water_breathing_is_not_a_factory_but_is_shipped() {
+        // The exact runtime failure, locked as a regression:
+        assert!(
+            !FULL_WHITELIST.contains(&"water_breathing"),
+            "water_breathing is NOT an Apoli factory (runtime: `is not defined`)"
+        );
+        assert!(
+            SHIPPED_ORIGINS_POWERS.contains(&"origins:water_breathing"),
+            "water-breathing must be granted via the SHIPPED power"
+        );
+        assert!(
+            origins_jar_shipped_power_ids().contains("origins:water_breathing"),
+            "the Origins jar must actually ship data/origins/powers/water_breathing.json"
+        );
+    }
+
+    // --- Emitted-shape: name/description PLAIN STRING, impact NUMBER. ---
+
+    #[test]
+    fn names_are_plain_strings_and_impact_is_a_number() {
+        let files = index(&build_origins_datapack(NS));
+        let pow_dir = format!("{ROOT}/data/{NS}/powers/");
+        let org_dir = format!("{ROOT}/data/{NS}/origins/");
+        for (path, _) in &files {
+            let is_pow = path.starts_with(&pow_dir) && path.ends_with(".json");
+            let is_org = path.starts_with(&org_dir) && path.ends_with(".json");
+            if is_pow || is_org {
+                let v = parse(&files, path);
+                for field in ["name", "description"] {
+                    assert!(
+                        v[field].is_string(),
+                        "{path} `{field}` MUST be a plain string (Apoli rejects \
+                         a component object); got {}",
+                        v[field]
+                    );
+                    assert!(!v[field].as_str().unwrap().is_empty(), "{path} `{field}` empty");
+                }
+            }
+            if is_org {
+                let v = parse(&files, path);
                 assert!(
-                    !f.is_string(),
-                    "{path} `{field}` must NOT be a bare string (would need a \
-                     resource pack to resolve); got {f}"
+                    v["impact"].is_i64(),
+                    "{path} `impact` MUST be an integer 0..=3, got {}",
+                    v["impact"]
                 );
-                // It is a JSON object with a non-empty `text` member.
+                let im = v["impact"].as_i64().unwrap();
+                assert!((0..=3).contains(&im), "{path} impact {im} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn no_emitted_power_uses_an_invalid_type_and_layer_has_replace_false() {
+        let files = index(&build_origins_datapack(NS));
+        let layer = parse(&files, &format!("{ROOT}/{LAYER_PATH_SUFFIX}"));
+        assert_eq!(layer["replace"], json!(false), "layer must be replace:false");
+        assert!(layer["origins"].as_array().is_some_and(|a| !a.is_empty()));
+        for (path, _) in &files {
+            if path.contains("/powers/") && path.ends_with(".json") {
+                let v = parse(&files, path);
+                let ty = v["type"].as_str().expect("power type string");
                 assert!(
-                    f.is_object(),
-                    "{path} `{field}` must be a literal Component object, got {f}"
-                );
-                let text = f["text"].as_str();
-                assert!(
-                    text.is_some(),
-                    "{path} `{field}`.text must be a string, got {f}"
-                );
-                assert!(
-                    !text.unwrap().is_empty(),
-                    "{path} `{field}`.text must be non-empty, got {f}"
+                    FULL_WHITELIST.contains(&bare_power_type(ty)),
+                    "{path} type `{ty}` not in catalog"
                 );
             }
         }
     }
 
-    // (6) Determinism: building twice is byte-identical.
     #[test]
-    fn origins_build_is_deterministic() {
+    fn survivalist_references_shipped_water_breathing_with_no_local_file() {
+        let files = index(&build_origins_datapack(NS));
+        let surv = parse(&files, &format!("{ROOT}/data/{NS}/origins/survivalist.json"));
+        let powers: Vec<&str> = surv["powers"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(
+            powers.contains(&"origins:water_breathing"),
+            "survivalist must reference the shipped power verbatim, got {powers:?}"
+        );
+        assert!(
+            !files.contains_key(&format!("{ROOT}/data/{NS}/powers/water_breathing.json")),
+            "must NOT emit a file for a shipped power"
+        );
+    }
+
+    // --- Validate is the gate and returns ALL failures. ---
+
+    #[test]
+    fn rescue_set_validates() {
+        validate(rescue_set()).expect("rescue set must validate");
+    }
+
+    #[test]
+    fn validate_collects_every_failure_not_just_the_first() {
+        let mut s = rescue_set();
+        s.powers[0].power_type = "apoli:water_breathing".into(); // bad type
+        s.powers[1].name = "  ".into(); // empty text
+        s.origins[0].impact = 9; // out of range
+        s.origins[0].powers.push("nope_not_real".into()); // dangling
+        let errs = validate(s).expect_err("must fail");
+        assert!(errs.len() >= 4, "must report ALL failures, got {errs:?}");
+        assert!(errs.iter().any(|e| matches!(e, IntegrityError::BadPowerType { .. })));
+        assert!(errs.iter().any(|e| matches!(e, IntegrityError::EmptyText { .. })));
+        assert!(errs.iter().any(|e| matches!(e, IntegrityError::BadImpact { .. })));
+        assert!(errs.iter().any(|e| matches!(e, IntegrityError::DanglingPowerRef { .. })));
+    }
+
+    #[test]
+    fn validate_rejects_missing_required_field() {
+        let mut s = rescue_set();
+        // tank_vitality is apoli:attribute (requires `modifier`); strip it.
+        s.powers[0].body.clear();
+        let errs = validate(s).expect_err("must fail");
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, IntegrityError::MissingRequiredField { field: "modifier", .. })));
+    }
+
+    #[test]
+    fn validated_is_only_constructable_via_validate_and_emit_is_deterministic() {
         let a = build_origins_datapack(NS);
         let b = build_origins_datapack(NS);
-        assert_eq!(a, b, "two builds must be byte-identical");
-        // Also stable across a different (still valid) namespace shape.
-        let c = build_origins_datapack("anvil");
-        assert_eq!(a, c);
+        assert_eq!(a, b, "emission must be byte-identical");
+        assert_eq!(a, build_origins_datapack("anvil"));
     }
 
-    // (7) Negative/integrity test: an origin referencing a non-emitted power
-    //     is rejected by the integrity check (proves the guard works).
     #[test]
-    fn origins_dangling_power_ref_is_rejected() {
-        let mut set = build_v1_set();
-        // Sanity: the curated set is valid.
-        assert!(validate(&set).is_ok(), "v1 set must validate");
+    fn origins_core_gate_distinguishes_core_from_addon() {
+        assert!(is_origins_core("3BeIrqZR", "anything.jar"));
+        assert!(!is_origins_core("FiDptjtR", "Origins-Classes-1.20-1.7.0.jar"));
+        assert!(is_origins_core("zzz", "Origins-1.10.2+mc.1.20.x.jar"));
+        assert!(!is_origins_core("zzz", "apoli-2.9.2.jar"));
+        assert!(!is_origins_core("zzz", "origins-classes-1.7.0.jar"));
+    }
 
-        // Point an origin at a power id that has no emitted power file.
-        set.origins[0]
-            .powers
-            .push("ghost_power_that_does_not_exist".to_string());
+    // --- Model-authored path (Phase 2): the gate working on LLM-style JSON. ---
 
-        match validate(&set) {
-            Err(IntegrityError::DanglingPowerRef { origin, power }) => {
-                assert_eq!(origin, "tank");
-                assert_eq!(power, "ghost_power_that_does_not_exist");
+    #[test]
+    fn prompt_catalog_is_generated_from_constants_and_states_hard_rules() {
+        let p = safe_catalog_prompt_section();
+        // Every SAFE type the validator accepts is shown to the model.
+        for st in SAFE_TYPES {
+            assert!(p.contains(st.id), "prompt missing safe type {}", st.id);
+        }
+        // Shipped powers are offered as references.
+        assert!(p.contains("origins:water_breathing"));
+        // The exact rules whose violation caused the original bug.
+        assert!(p.to_lowercase().contains("plain string"));
+        assert!(p.contains("INTEGER 0-3") || p.contains("integer 0-3") || p.contains("INTEGER 0"));
+        assert!(p.contains("REPLACES") || p.contains("does NOT accumulate"));
+        // Attribute + operation enums come from the constants.
+        assert!(p.contains("minecraft:generic.max_health"));
+        assert!(p.contains("multiply_base"));
+    }
+
+    #[test]
+    fn errors_to_json_carries_actionable_hints() {
+        let mut s = rescue_set();
+        s.powers[0].power_type = "apoli:water_breathing".into();
+        s.powers[1].name = "".into();
+        let errs = validate(s).expect_err("must fail");
+        let j = errors_to_json(&errs);
+        let arr = j.as_array().expect("array");
+        let bpt = arr
+            .iter()
+            .find(|e| e["kind"] == "BadPowerType")
+            .expect("BadPowerType entry");
+        // The hint must steer the model to the correct fix (reference shipped).
+        let hint = bpt["hint"].as_str().unwrap().to_lowercase();
+        assert!(hint.contains("shipped") && hint.contains("origins:"));
+        assert!(arr.iter().any(|e| e["kind"] == "EmptyText"));
+        for e in arr {
+            for k in ["kind", "where", "why", "hint"] {
+                assert!(e.get(k).and_then(|v| v.as_str()).is_some(), "missing {k}");
             }
-            other => panic!("expected DanglingPowerRef, got {other:?}"),
         }
     }
 
-    // (8) Extra integrity guards: bad type / bad icon / bad impact / bad
-    //     attribute / dup id / empty set are all rejected.
     #[test]
-    fn origins_integrity_guards_catch_each_class() {
-        // Bad power type (incl. the forbidden no-op sentinel).
-        let mut s = build_v1_set();
-        s.powers[0].power_type = "apoli:simple".to_string();
-        assert!(matches!(
-            validate(&s),
-            Err(IntegrityError::BadPowerType { .. })
-        ));
-
-        // Bad icon (not a real allowlisted vanilla item).
-        let mut s = build_v1_set();
-        s.origins[0].icon = "minecraft:not_a_real_item".to_string();
-        assert!(matches!(validate(&s), Err(IntegrityError::BadIcon { .. })));
-
-        // Bad impact.
-        let mut s = build_v1_set();
-        s.origins[0].impact = "catastrophic".to_string();
-        assert!(matches!(validate(&s), Err(IntegrityError::BadImpact { .. })));
-
-        // Bad attribute target.
-        let mut s = build_v1_set();
-        s.powers[0] = power_attribute(
-            "tank_max_health",
-            "minecraft:generic.luck",
-            "addition",
-            1.0,
-            "X",
-        );
-        assert!(matches!(
-            validate(&s),
-            Err(IntegrityError::BadAttribute { .. })
-        ));
-
-        // Bad operation.
-        let mut s = build_v1_set();
-        s.powers[0] = power_attribute(
-            "tank_max_health",
-            "minecraft:generic.max_health",
-            "set",
-            1.0,
-            "X",
-        );
-        assert!(matches!(
-            validate(&s),
-            Err(IntegrityError::BadOperation { .. })
-        ));
-
-        // Duplicate power id.
-        let mut s = build_v1_set();
-        let dup = s.powers[0].clone();
-        s.powers.push(dup);
-        assert!(matches!(
-            validate(&s),
-            Err(IntegrityError::DuplicateId(_))
-        ));
-
-        // Bad id shape.
-        let mut s = build_v1_set();
-        s.origins[0].id = "Tank Origin!".to_string();
-        assert!(matches!(validate(&s), Err(IntegrityError::BadId(_))));
-
-        // Empty set.
-        let s = OriginsSet {
-            origins: vec![],
-            powers: vec![],
-        };
-        assert!(matches!(validate(&s), Err(IntegrityError::EmptySet)));
+    fn realistic_llm_proposal_validates_and_writes_schema_correct() {
+        // A plausible model proposal for a tech pack: one local attribute
+        // power + a shipped reference. Drive it through the REAL path.
+        let proposal = serde_json::json!({
+            "origins": [{
+                "id": "engineer",
+                "name": "Engineer",
+                "description": "Tinkerer at home among machines — tougher and sees in the dark.",
+                "powers": ["engineer_hardened", "origins:water_breathing"],
+                "icon": "minecraft:iron_chestplate",
+                "impact": 2,
+                "order": 0
+            }],
+            "powers": [{
+                "id": "engineer_hardened",
+                "name": "Hardened",
+                "description": "Years at the forge gave you extra armor.",
+                "type": "apoli:attribute",
+                "body": { "modifier": { "attribute": "minecraft:generic.armor", "operation": "addition", "value": 3.0, "name": "Engineer Plating" } }
+            }]
+        });
+        let set: OriginsSet = serde_json::from_value(proposal).expect("LLM JSON deserializes");
+        let v = validate(set).expect("a well-formed proposal must validate");
+        let dir = tempfile::tempdir().unwrap();
+        write_validated_origins(dir.path(), "anvil", &v).expect("writes");
+        let base = dir.path().join(ROOT);
+        // Shipped ref → NO local file; the local power → a file.
+        assert!(!base.join("data/anvil/powers/water_breathing.json").exists());
+        let pf: Value = serde_json::from_str(
+            &std::fs::read_to_string(base.join("data/anvil/powers/engineer_hardened.json")).unwrap(),
+        ).unwrap();
+        assert!(pf["name"].is_string(), "name must be a plain string");
+        let of: Value = serde_json::from_str(
+            &std::fs::read_to_string(base.join("data/anvil/origins/engineer.json")).unwrap(),
+        ).unwrap();
+        assert!(of["impact"].is_i64(), "impact must be an integer");
+        let powers: Vec<&str> = of["powers"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(powers.contains(&"origins:water_breathing"), "shipped ref kept verbatim");
+        assert!(powers.contains(&"anvil:engineer_hardened"), "local ref namespaced");
     }
 
-    // (9) write_origins_datapack lands files under the sibling root in a temp
-    //     dir and they parse off disk (mirrors the quest writer pattern).
     #[test]
-    fn origins_write_to_instance_roundtrips() {
-        let tmp = std::env::temp_dir().join(format!(
-            "anvil_origins_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&tmp);
-        write_origins_datapack(&tmp, NS).expect("write must succeed");
-
-        let mcmeta_disk = tmp
-            .join(ROOT)
-            .join("pack.mcmeta");
-        let raw = std::fs::read_to_string(&mcmeta_disk).expect("pack.mcmeta on disk");
-        let v: Value = serde_json::from_str(&raw).expect("disk pack.mcmeta parses");
-        assert_eq!(v["pack"]["pack_format"], 15);
-
-        let layer_disk = tmp
-            .join(ROOT)
-            .join("data/origins/origin_layers/origin.json");
-        assert!(layer_disk.exists(), "layer file must exist on disk at exact path");
-
-        let _ = std::fs::remove_dir_all(&tmp);
+    fn the_exact_historical_llm_mistakes_are_rejected_by_the_gate() {
+        // What the model WOULD have produced under the old (buggy) guidance:
+        // a component-object name and the non-existent water_breathing type.
+        // The gate must reject BOTH before anything is written.
+        let bad = serde_json::json!({
+            "origins": [{
+                "id": "diver", "name": "Diver",
+                "description": "breathes underwater",
+                "powers": ["diver_breathe"], "icon": "minecraft:cod",
+                "impact": 1, "order": 0
+            }],
+            "powers": [{
+                "id": "diver_breathe",
+                "name": "Gills",
+                "description": "x",
+                "type": "apoli:water_breathing"
+            }]
+        });
+        let set: OriginsSet = serde_json::from_value(bad).unwrap();
+        let errs = validate(set).expect_err("must be rejected by the gate");
+        assert!(errs.iter().any(|e| matches!(e, IntegrityError::BadPowerType { .. })));
     }
 }
