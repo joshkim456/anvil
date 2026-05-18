@@ -1,0 +1,258 @@
+{
+  "id": "18b09b45cf64ee883408",
+  "name": "Stellar Origins",
+  "mc_version": "1.20.1",
+  "loader": "fabric",
+  "mods": [
+    {
+      "project_id": "P7dR8mSH",
+      "version_id": "hu6gukgT",
+      "name": "fabric-api-0.92.9+1.20.1.jar"
+    },
+    {
+      "project_id": "AANobbMI",
+      "version_id": "OihdIimA",
+      "name": "sodium-fabric-0.5.13+mc1.20.1.jar"
+    },
+    {
+      "project_id": "Orvt0mRa",
+      "version_id": "nQHYSjxO",
+      "name": "indium-1.0.36+mc1.20.1.jar"
+    },
+    {
+      "project_id": "gvQqBUqZ",
+      "version_id": "iEcXOkz4",
+      "name": "lithium-fabric-mc1.20.1-0.11.4.jar"
+    },
+    {
+      "project_id": "uXXizFIs",
+      "version_id": "unerR5MN",
+      "name": "ferritecore-6.0.1-fabric.jar"
+    },
+    {
+      "project_id": "NNAgCjsB",
+      "version_id": "rpOQImBG",
+      "name": "entityculling-fabric-1.10.2-mc1.20.1.jar"
+    },
+    {
+      "project_id": "51shyZVL",
+      "version_id": "3wkuUDPy",
+      "name": "moreculling-1.20.1-0.24.5.jar"
+    },
+    {
+      "project_id": "nmDcB62a",
+      "version_id": "rPmgLeZC",
+      "name": "modernfix-fabric-5.25.2+mc1.20.1.jar"
+    },
+    {
+      "project_id": "LQ3K71Q1",
+      "version_id": "QwPQBhiQ",
+      "name": "dynamic-fps-3.11.4+minecraft-1.20.0-fabric.jar"
+    },
+    {
+      "project_id": "5ZwdcRci",
+      "version_id": "Us8JqrP9",
+      "name": "ImmediatelyFast-Fabric-1.5.4+1.20.4.jar"
+    },
+    {
+      "project_id": "fRiHVvU7",
+      "version_id": "YbXDHf8W",
+      "name": "emi-1.1.24+1.20.1+fabric.jar"
+    },
+    {
+      "project_id": "1bokaNcj",
+      "version_id": "IAvIWG18",
+      "name": "xaerominimap-fabric-1.20.1-25.3.12.jar"
+    },
+    {
+      "project_id": "NcUtCpym",
+      "version_id": "4iL1uj0g",
+      "name": "xaeroworldmap-fabric-1.20.1-1.40.16.jar"
+    },
+    {
+      "project_id": "EsAfCjCV",
+      "version_id": "N5XeV21r",
+      "name": "appleskin-fabric-mc1.20.1-2.5.2.jar"
+    },
+    {
+      "project_id": "xv94TkTM",
+      "version_id": "6ipZLQSK",
+      "name": "Controlling-fabric-1.20.1-12.0.2.jar"
+    },
+    {
+      "project_id": "fuuu3xnx",
+      "version_id": "eh4IBlu2",
+      "name": "Searchables-fabric-1.20.1-1.0.3.jar"
+    },
+    {
+      "project_id": "aC3cM3Vq",
+      "version_id": "mjuG4AYd",
+      "name": "MouseTweaks-fabric-mc1.20-2.26.jar"
+    },
+    {
+      "project_id": "O7RBXm3n",
+      "version_id": "ZTQIr2Z9",
+      "name": "InventoryProfilesNext-fabric-1.20-1.10.20.jar"
+    },
+    {
+      "project_id": "onSQdWhM",
+      "version_id": "Uygzs3iI",
+      "name": "libIPN-fabric-1.20-4.0.2.jar"
+    },
+    {
+      "project_id": "Ha28R6CL",
+      "version_id": "2i87JpYj",
+      "name": "fabric-language-kotlin-1.13.11+kotlin.2.3.21.jar"
+    },
+    {
+      "project_id": "9s6osm5g",
+      "version_id": "2xQdCMyG",
+      "name": "cloth-config-11.1.136-fabric.jar"
+    },
+    {
+      "project_id": "mOgUt4GM",
+      "version_id": "lEkperf6",
+      "name": "modmenu-7.2.2.jar"
+    },
+    {
+      "project_id": "3BeIrqZR",
+      "version_id": "oT0CGnBQ",
+      "name": "Origins-1.10.2+mc.1.20.x.jar"
+    },
+    {
+      "project_id": "FiDptjtR",
+      "version_id": "EnGfmh9y",
+      "name": "Origins-Classes-1.20-1.7.0.jar"
+    },
+    {
+      "project_id": "3ufwT9JF",
+      "version_id": "gZClwdxY",
+      "name": "ad_astra-fabric-1.20.1-1.15.20.jar"
+    },
+    {
+      "project_id": "G1hIVOrD",
+      "version_id": "UOdaYbhh",
+      "name": "resourcefullib-fabric-1.20.1-2.1.29.jar"
+    },
+    {
+      "project_id": "M1953qlQ",
+      "version_id": "2gStMKhM",
+      "name": "resourcefulconfig-fabric-1.20.1-2.1.3.jar"
+    },
+    {
+      "project_id": "2u6LRnMa",
+      "version_id": "f3ATcSfq",
+      "name": "botarium-fabric-1.20.1-2.3.4.jar"
+    },
+    {
+      "project_id": "du3UfiLL",
+      "version_id": "yoCCX4Cc",
+      "name": "BOMD-1.7.5-1.20.1.jar"
+    },
+    {
+      "project_id": "8BmcQJ2H",
+      "version_id": "PdrSPr53",
+      "name": "geckolib-fabric-1.20.1-4.8.3.jar"
+    },
+    {
+      "project_id": "5sy6g3kz",
+      "version_id": "OtwNg4r4",
+      "name": "bettercombat-fabric-1.9.0+1.20.1.jar"
+    },
+    {
+      "project_id": "gedNE4y2",
+      "version_id": "yDqYTUaf",
+      "name": "player-animation-lib-fabric-1.0.2-rc1+1.20.jar"
+    },
+    {
+      "project_id": "3eMENr4V",
+      "version_id": "5ordAPa5",
+      "name": "TechReborn-5.8.15.jar"
+    },
+    {
+      "project_id": "3NCrJdj3",
+      "version_id": "sWpmIISP",
+      "name": "RebornCore-5.8.15.jar"
+    },
+    {
+      "project_id": "8DfbfASn",
+      "version_id": "Vd5XOXlj",
+      "name": "DungeonsArise-1.20.1-2.1.57-fabric-release.jar"
+    },
+    {
+      "project_id": "LOpKHB2A",
+      "version_id": "qHh09oyJ",
+      "name": "waystones-fabric-1.20.1-14.1.20.jar"
+    },
+    {
+      "project_id": "MBAkmtvl",
+      "version_id": "TSihd8MJ",
+      "name": "balm-fabric-1.20.1-7.3.38.jar"
+    },
+    {
+      "project_id": "7vxePowz",
+      "version_id": "Z8UNayLO",
+      "name": "FarmersDelight-1.20.1-2.4.1+refabricated.jar"
+    },
+    {
+      "project_id": "5aaWibi9",
+      "version_id": "AHxQGtuC",
+      "name": "trinkets-3.7.2.jar"
+    },
+    {
+      "project_id": "lo90fZoB",
+      "version_id": "Iw91uuFK",
+      "name": "Heracles-fabric-1.20.1-1.1.13.jar"
+    },
+    {
+      "project_id": "KwWsINvD",
+      "version_id": "UFqjauYD",
+      "name": "OpenLoader-Fabric-1.20.1-19.0.5.jar"
+    },
+    {
+      "project_id": "nU0bVIaL",
+      "version_id": "nm6fiGRx",
+      "name": "Patchouli-1.20.1-85-FABRIC.jar"
+    },
+    {
+      "project_id": "HXF82T3G",
+      "version_id": "eZaag2ca",
+      "name": "BiomesOPlenty-fabric-1.20.1-19.0.0.96.jar"
+    },
+    {
+      "project_id": "kkmrDlKT",
+      "version_id": "J1S3aA8i",
+      "name": "TerraBlender-fabric-1.20.1-3.0.1.10.jar"
+    },
+    {
+      "project_id": "s3dmwKy5",
+      "version_id": "25HLOiOl",
+      "name": "GlitchCore-fabric-1.20.1-0.0.1.1.jar"
+    },
+    {
+      "project_id": "8oi3bsk5",
+      "version_id": "WeYhEb5d",
+      "name": "Terralith_1.20.x_v2.5.4.jar"
+    },
+    {
+      "project_id": "nvQzSEkH",
+      "version_id": "oJx1UoWN",
+      "name": "Jade-1.20-Fabric-11.12.3.jar"
+    },
+    {
+      "project_id": "kFs9AeXi",
+      "version_id": "bUvfY4Da",
+      "name": "indrev-1.16.5-BETA.jar"
+    },
+    {
+      "project_id": "692GClaE",
+      "version_id": "bd3nitTk",
+      "name": "modonomicon-1.20.1-fabric-1.79.3.jar"
+    },
+    {
+      "project_id": "K01OU20C",
+      "version_id": "qW85eawp",
+      "name": "cardinal-components-api-5.2.2.jar"
+    }
+  ]
+}

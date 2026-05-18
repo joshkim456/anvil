@@ -1,0 +1,3667 @@
+{
+  "title": "Stellar Archetypes",
+  "chapters": [
+    {
+      "id": "ch1_awakening",
+      "title": "Chapter I: Awakening Protocol",
+      "quests": [
+        {
+          "id": "q1_crashlanded",
+          "title": "Signal Lost",
+          "description": "You wake in an unfamiliar world with nothing but the clothes on your back. A distant transmission crackles: something has fallen from orbit. Survive your first night and orient yourself.",
+          "x": 0.0,
+          "y": 0.0,
+          "deps": [],
+          "tasks": [
+            {
+              "type": "stat",
+              "stat": "minecraft:play_one_minute",
+              "target": 1200
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:torch",
+              "count": 16
+            },
+            {
+              "type": "xp",
+              "amount": 50
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_first_wood",
+          "title": "Hands in the Dirt",
+          "description": "The first step of any great journey is punching a tree. Gather wood and craft a crafting table to begin building your future.",
+          "x": 1.0,
+          "y": -1.0,
+          "deps": [
+            "q1_crashlanded"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "minecraft:crafting_table",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:oak_planks",
+              "count": 32
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_stone_age",
+          "title": "Stone Cold Foundation",
+          "description": "Iron is scarce and precious. Before you reach the stars, you must learn to crawl. Craft a full set of stone tools to begin your descent into the earth.",
+          "x": 1.0,
+          "y": 1.0,
+          "deps": [
+            "q1_crashlanded"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "minecraft:stone_pickaxe",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:cobblestone",
+              "count": 64
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_first_iron",
+          "title": "Iron Will",
+          "description": "Deep beneath the surface lies the first real resource of your ascent. Mine iron ore and smelt it. This will be the backbone of everything to come.",
+          "x": 2.0,
+          "y": 0.0,
+          "deps": [
+            "q1_first_wood",
+            "q1_stone_age"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "minecraft:iron_ingot",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:iron_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 30
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_shelter",
+          "title": "Four Walls and a Roof",
+          "description": "The night is dangerous, especially for a newcomer with no power yet. Build a proper shelter before exploring further. Sleep to set your spawn point.",
+          "x": 2.0,
+          "y": 2.0,
+          "deps": [
+            "q1_first_wood"
+          ],
+          "tasks": [
+            {
+              "type": "advancement",
+              "id": "minecraft:story/sleep_in_bed"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:bread",
+              "count": 8
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_food_supply",
+          "title": "Sustenance Protocol",
+          "description": "A hungry adventurer is a dead adventurer. You will need a reliable food source for the long journey ahead. Plant crops and harvest your first meal.",
+          "x": 2.0,
+          "y": -2.0,
+          "deps": [
+            "q1_first_wood"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "farmersdelight:mixed_salad",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:bread",
+              "count": 16
+            },
+            {
+              "type": "xp",
+              "amount": 20
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_iron_armor",
+          "title": "Armored Resolve",
+          "description": "The world is full of things that want to kill you before you reach the stars. Craft and equip a full set of iron armor to give yourself a fighting chance.",
+          "x": 3.0,
+          "y": 0.0,
+          "deps": [
+            "q1_first_iron"
+          ],
+          "tasks": [
+            {
+              "type": "advancement",
+              "id": "minecraft:story/obtain_armor"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:shield",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 50
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_dungeons",
+          "title": "Ruins of the Old World",
+          "description": "Strange structures dot the landscape — dungeons, ruins, abandoned taverns. They hold loot vital for early progression. Explore one and loot its chest.",
+          "x": 3.0,
+          "y": 2.0,
+          "deps": [
+            "q1_shelter"
+          ],
+          "tasks": [
+            {
+              "type": "advancement",
+              "id": "minecraft:adventure/adventuring_time"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:golden_apple",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 40
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_jade_scanner",
+          "title": "What's That Block?",
+          "description": "The world is full of unknown machines and materials. Hold your gaze on any block or entity and Jade will reveal its secrets. Knowledge is the first weapon of a stellar archetype.",
+          "x": 3.0,
+          "y": -2.0,
+          "deps": [
+            "q1_food_supply"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 25
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_nether",
+          "title": "Through the Hellgate",
+          "description": "The Nether holds resources unavailable on the surface — blaze rods, ancient debris, unique ores. Build a nether portal and step through. The stars demand sacrifice.",
+          "x": 4.0,
+          "y": 0.0,
+          "deps": [
+            "q1_iron_armor"
+          ],
+          "tasks": [
+            {
+              "type": "advancement",
+              "id": "minecraft:story/enter_the_nether"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:blaze_rod",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 75
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_graveyard_encounter",
+          "title": "Whispers of the Undead",
+          "description": "Dark graveyards spawn at night, filled with ghouls, reapers, and worse. Venture into one and survive. The corrupted dead carry secrets you will need later.",
+          "x": 4.0,
+          "y": 2.0,
+          "deps": [
+            "q1_dungeons"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "graveyard:ghoul",
+              "count": 5
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "graveyard:bone_dagger",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 60
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_diamonds",
+          "title": "Deep Carbon",
+          "description": "Diamond is no longer the end goal — it is merely the prerequisite. Mine diamond ore deep below Y=16 using an iron or better pickaxe. The cosmic forge demands it.",
+          "x": 4.0,
+          "y": -2.0,
+          "deps": [
+            "q1_nether"
+          ],
+          "tasks": [
+            {
+              "type": "advancement",
+              "id": "minecraft:story/mine_diamond"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:diamond",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_netherite",
+          "title": "Forged in Hellfire",
+          "description": "Ancient debris is the rarest ore in the Nether, found deep in basalt deltas and soul sand valleys. Smelt it into netherite scraps and combine them into an ingot. This alloy will form the spine of your space suit.",
+          "x": 5.0,
+          "y": 0.0,
+          "deps": [
+            "q1_nether",
+            "q1_diamonds"
+          ],
+          "tasks": [
+            {
+              "type": "advancement",
+              "id": "minecraft:nether/netherite_armor"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:netherite_ingot",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_create_intro",
+          "title": "Gears Start Turning",
+          "description": "The Create mod brings kinetic automation to your workshop. Craft a Cogwheel and a Mechanical Press to begin your industrial journey. Automation is the bridge between survival and space.",
+          "x": 5.0,
+          "y": 2.0,
+          "deps": [
+            "q1_iron_armor",
+            "q1_dungeons"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "create:andesite_alloy",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "create:andesite_alloy",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 50
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_tech_reborn_intro",
+          "title": "The Electric Age Begins",
+          "description": "Tech Reborn brings industrial machines powered by electricity. Your first machine is the Manual Kinetic Generator — it lets you generate EU by hand. Craft it and power your first circuit.",
+          "x": 5.0,
+          "y": -2.0,
+          "deps": [
+            "q1_diamonds"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:electronic_circuit",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:electronic_circuit",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 75
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_vial_of_blood",
+          "title": "A Price in Blood",
+          "description": "The Graveyard's Reaper drops Vials of Blood — a rare reagent used in advanced crafting. Hunt a Reaper at night and collect what it leaves behind.",
+          "x": 5.0,
+          "y": 4.0,
+          "deps": [
+            "q1_graveyard_encounter"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "graveyard:reaper",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "graveyard:vial_of_blood",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_obsidian_heart",
+          "title": "Heart of Stone",
+          "description": "The Obsidilith — a towering construct of corrupted obsidian — sleeps beneath the earth. Its core, the Obsidian Heart, is one of the materials you will need to forge a rocket engine frame. Seek its altar.",
+          "x": 6.0,
+          "y": 0.0,
+          "deps": [
+            "q1_netherite",
+            "q1_create_intro",
+            "q1_tech_reborn_intro"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 50
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_first_kill_boss",
+          "title": "The First Hunt",
+          "description": "Before you can reach the stars, you must prove yourself against the world's apex predators. The Night Lich roams in shadowed crypts, summoned at a dark altar. Defeat it and claim your first boss trophy.",
+          "x": 6.0,
+          "y": 2.0,
+          "deps": [
+            "q1_vial_of_blood",
+            "q1_netherite"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:ancient_anima",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "bosses_of_mass_destruction:lich",
+            "display_name": "Malachar, the Night Lich",
+            "attributes": {
+              "max_health": 180.0,
+              "attack_damage": 14.0,
+              "armor": 8.0,
+              "knockback_resistance": 0.7,
+              "movement_speed": 0.22,
+              "follow_range": 48.0
+            },
+            "bossbar_color": "purple",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Lich's Frozen Crown"
+          }
+        },
+        {
+          "id": "q1_ancient_anima",
+          "title": "Anima Extracted",
+          "description": "The Ancient Anima pulses with eldritch energy. This crystallized soul matter is the key ingredient for Ad Astra's steel processing chain. Hold it and feel the power within.",
+          "x": 7.0,
+          "y": 2.0,
+          "deps": [
+            "q1_first_kill_boss"
+          ],
+          "tasks": [
+            {
+              "type": "gather_item",
+              "item": "bosses_of_mass_destruction:ancient_anima",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:astrodux",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q1_astrodux",
+          "title": "Stranger Stars",
+          "description": "The Astrodux is Ad Astra's field guide to space travel. Open it and read the first entry. It describes the moon — pale, silent, and unreachable without a Tier 1 Rocket. The journey officially begins.",
+          "x": 7.0,
+          "y": 0.0,
+          "deps": [
+            "q1_ancient_anima",
+            "q1_obsidian_heart"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:astrodux",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        }
+      ]
+    },
+    {
+      "id": "ch2_archetype",
+      "title": "Chapter II: The Archetype Trial",
+      "quests": [
+        {
+          "id": "q2_origin_chosen",
+          "title": "Who Are You?",
+          "description": "When you first joined this world, you were offered a choice. That choice defines everything. Your archetype grants unique abilities — passive buffs, active powers, and weaknesses that shape your playstyle. Check your Origins menu (O key) and confirm your archetype.",
+          "x": 0.0,
+          "y": 0.0,
+          "deps": [
+            "q1_crashlanded"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_class_chosen",
+          "title": "Warrior, Mage, or Rogue?",
+          "description": "Origins: Classes gives you a second layer — your combat role. Each class changes how you fight. Warriors hit hard in melee. Mages bend the battlefield. Rogues strike fast and vanish. Choose wisely, as your class synergizes with your space role.",
+          "x": 1.0,
+          "y": 0.0,
+          "deps": [
+            "q2_origin_chosen"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_warrior_trial",
+          "title": "Trial of the Vanguard",
+          "description": "Warriors are the frontline of any crew. Your archetype power amplifies melee damage. Prove your worth by slaying 20 hostile mobs with a melee weapon. The Vanguard does not flinch.",
+          "x": 2.0,
+          "y": -2.0,
+          "deps": [
+            "q2_class_chosen"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "minecraft:zombie",
+              "count": 20
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:iron_sword",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 75
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_mage_trial",
+          "title": "Trial of the Aethermancer",
+          "description": "Mages channel energy into destructive spells and protective wards. Your archetype passively boosts projectile and spell power. Prove your focus by defeating 10 skeletons — let them close in, then counter with precision.",
+          "x": 2.0,
+          "y": 0.0,
+          "deps": [
+            "q2_class_chosen"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "minecraft:skeleton",
+              "count": 10
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:bow",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 75
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_rogue_trial",
+          "title": "Trial of the Shadowrunner",
+          "description": "Rogues are invisible until they strike. Your archetype grants brief invisibility on sprint. Prove your stealth by obtaining a Bone Dagger — the signature weapon of the shadows — and surviving a night without taking damage.",
+          "x": 2.0,
+          "y": 2.0,
+          "deps": [
+            "q2_class_chosen"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "graveyard:bone_dagger",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:leather_boots",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 75
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_trinkets_slot",
+          "title": "Gear Up, Archetype",
+          "description": "Trinkets adds accessory slots visible in your inventory screen. Press E and look for the Trinkets button. Equip a ring or amulet to activate a passive archetype bonus — some archetypes unlock hidden powers this way.",
+          "x": 2.0,
+          "y": -4.0,
+          "deps": [
+            "q2_class_chosen"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "minecraft:amethyst_shard",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 50
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_vanguard_mastery",
+          "title": "Unbreakable Line",
+          "description": "A true Vanguard does not just swing harder — they endure. Craft bronze armor from Tech Reborn and wear it in a full dungeon run. The alloy of tin and copper is tougher than iron and more forgiving.",
+          "x": 3.0,
+          "y": -2.0,
+          "deps": [
+            "q2_warrior_trial"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:bronze_chestplate",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:bronze_ingot",
+              "count": 16
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_aethermancer_mastery",
+          "title": "Eyes Everywhere",
+          "description": "A Mage's true power is information. Craft the Engineer's Goggles from Create and equip them. They reveal stress values, fluid levels, and machine states — your magical perception turned mechanical.",
+          "x": 3.0,
+          "y": 0.0,
+          "deps": [
+            "q2_mage_trial"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "create:goggles",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "create:goggles",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_shadowrunner_mastery",
+          "title": "Blade in the Dark",
+          "description": "The Shadowrunner excels at quick lethal strikes followed by rapid retreat. Kill a Wraith from The Graveyard — they are fast, dangerous, and hunt at night. Your speed and stealth are your only advantages.",
+          "x": 3.0,
+          "y": 2.0,
+          "deps": [
+            "q2_rogue_trial"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "graveyard:wraith",
+              "count": 3
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "graveyard:vial_of_blood",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_archetype_converge",
+          "title": "The Crew Assembles",
+          "description": "No rocket flies alone. In multiplayer, each player brings a different archetype to the crew. Ensure at least one Vanguard, one Aethermancer, and one Shadowrunner are in the party before the next phase. In solo play, your secondary class fills the gaps.",
+          "x": 4.0,
+          "y": 0.0,
+          "deps": [
+            "q2_vanguard_mastery",
+            "q2_aethermancer_mastery",
+            "q2_shadowrunner_mastery"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_corrupted_champion",
+          "title": "The Corrupted Champion",
+          "description": "Deep within the darkest graveyard structures stalks the Corrupted Champion — The Graveyard's most powerful boss. It carries Dark Iron Ingots, a material unlike anything you can mine normally. Defeat it and take its essence.",
+          "x": 4.0,
+          "y": 2.0,
+          "deps": [
+            "q2_archetype_converge"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "graveyard:dark_iron_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 250
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "graveyard:lich",
+            "display_name": "Vethkarath, the Corrupted Champion",
+            "attributes": {
+              "max_health": 220.0,
+              "attack_damage": 16.0,
+              "armor": 12.0,
+              "knockback_resistance": 0.8,
+              "movement_speed": 0.25,
+              "follow_range": 50.0
+            },
+            "bossbar_color": "green",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Dark Iron Sigil"
+          }
+        },
+        {
+          "id": "q2_dark_iron",
+          "title": "Iron That Drinks Shadow",
+          "description": "Dark Iron Ingots from the Corrupted Champion are denser than netherite and absorb certain enchantments differently. Collect 8 to begin forging archetype-specific equipment upgrades.",
+          "x": 5.0,
+          "y": 2.0,
+          "deps": [
+            "q2_corrupted_champion"
+          ],
+          "tasks": [
+            {
+              "type": "gather_item",
+              "item": "graveyard:dark_iron_ingot",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "graveyard:dark_iron_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_steel_ingot",
+          "title": "Forging Stellar Steel",
+          "description": "Ad Astra's Steel Ingot is different from Tech Reborn's steel — it is processed from refined iron using the Astro Metallurgy process. You will need both kinds. Produce 8 Ad Astra steel ingots for rocket component prototyping.",
+          "x": 4.0,
+          "y": -2.0,
+          "deps": [
+            "q2_archetype_converge",
+            "q1_astrodux"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_ingot",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_iron_plate",
+          "title": "Plates for the Hull",
+          "description": "Rocket hulls are not built from raw ingots — they require precision-pressed plates. Craft Iron Plates and Steel Plates using Ad Astra's workbench or a hammer. These form the structural frame of your first rocket.",
+          "x": 5.0,
+          "y": -2.0,
+          "deps": [
+            "q2_steel_ingot"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:iron_plate",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_plate",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_create_cogwheel",
+          "title": "The Machine That Makes Machines",
+          "description": "Create's Mechanical Press is essential for mass-producing rocket plates. Build a Mechanical Press powered by a waterwheel or windmill. Automate your plate production — hand-crafting at scale is for beginners.",
+          "x": 5.0,
+          "y": 0.0,
+          "deps": [
+            "q2_archetype_converge",
+            "q2_iron_plate"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "create:copper_sheet",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "create:andesite_alloy",
+              "count": 16
+            },
+            {
+              "type": "xp",
+              "amount": 125
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_void_blossom_hunt",
+          "title": "The Blossoming Void",
+          "description": "The Void Blossom lurks in jungle and dark forest biomes, hiding among flowers until disturbed. Its Void Thorn drop is a key component in high-energy space alloys. Find it and end its bloom.",
+          "x": 5.0,
+          "y": 4.0,
+          "deps": [
+            "q2_dark_iron"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:void_thorn",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 250
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "bosses_of_mass_destruction:void_blossom",
+            "display_name": "Nyxara, the Void Blossom",
+            "attributes": {
+              "max_health": 200.0,
+              "attack_damage": 13.0,
+              "armor": 6.0,
+              "knockback_resistance": 0.5,
+              "movement_speed": 0.27,
+              "follow_range": 45.0
+            },
+            "bossbar_color": "pink",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Petal of the Void"
+          }
+        },
+        {
+          "id": "q2_void_thorn",
+          "title": "Thorns of the Deep Dark",
+          "description": "The Void Thorn crystallizes void energy into a sharp spike that resonates with Ad Astra's exotic alloys. Collect 4 Void Thorns — they will be needed for the Tier 1 rocket engine upgrade.",
+          "x": 6.0,
+          "y": 4.0,
+          "deps": [
+            "q2_void_blossom_hunt"
+          ],
+          "tasks": [
+            {
+              "type": "gather_item",
+              "item": "bosses_of_mass_destruction:void_thorn",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:void_thorn",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_tech_reborn_alloy",
+          "title": "Advanced Metallurgy",
+          "description": "Tech Reborn's Advanced Alloy Ingots are made by combining refined iron and chrome dust in an Industrial Electrolyzer. These alloys withstand the thermal stress of reentry and liftoff. Produce 8 ingots.",
+          "x": 6.0,
+          "y": -2.0,
+          "deps": [
+            "q2_create_cogwheel",
+            "q1_tech_reborn_intro"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:advanced_alloy_ingot",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:advanced_circuit",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_archetype_badge",
+          "title": "Badge of the Archetype",
+          "description": "You have proven your powers, crafted your alloys, and hunted the first bosses. Your archetype is no longer just a title — it is your identity. The next chapter awaits: the Industrial Uprising. The stars are closer than ever.",
+          "x": 7.0,
+          "y": 0.0,
+          "deps": [
+            "q2_void_thorn",
+            "q2_dark_iron",
+            "q2_tech_reborn_alloy",
+            "q2_iron_plate"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:advanced_alloy_ingot",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:advanced_circuit",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q2_space_suit_preview",
+          "title": "One Small Step Toward a Suit",
+          "description": "Space kills without oxygen. The Ad Astra Space Suit requires Steel Plates, Iron Plates and advanced materials. This is your first look at what the endgame needs. Study the recipe in EMI and begin hoarding resources.",
+          "x": 7.0,
+          "y": -2.0,
+          "deps": [
+            "q2_iron_plate",
+            "q2_tech_reborn_alloy"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:space_helmet",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:oxygen_gear",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        }
+      ]
+    },
+    {
+      "id": "ch3_industrial",
+      "title": "Chapter III: The Industrial Uprising",
+      "quests": [
+        {
+          "id": "q3_power_grid",
+          "title": "Power Grid Zero",
+          "description": "Your workshop needs real power before it can produce rocket components. Tech Reborn's machines run on EU (Energy Units). Build your first power generation setup using a Thermal Generator or a Wind Turbine.",
+          "x": 0.0,
+          "y": 0.0,
+          "deps": [
+            "q2_archetype_badge"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:electronic_circuit",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:electronic_circuit",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_create_water_wheel",
+          "title": "First Wheel Turns",
+          "description": "Create's waterwheel or windmill generates Rotational Force (RPM). Connect it to a Mechanical Press to start automating plate production at scale. Your first fully automated machine is a milestone.",
+          "x": 0.0,
+          "y": 2.0,
+          "deps": [
+            "q2_archetype_badge"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "create:copper_sheet",
+              "count": 32
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "create:copper_sheet",
+              "count": 16
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_alloy_smelter",
+          "title": "Alloy Smelter Online",
+          "description": "The Alloy Smelter combines metals into advanced alloys automatically. Set it up and use it to produce 16 Bronze Ingots by smelting copper and tin dust together. Industrial alloying is faster than hand-crafting.",
+          "x": 1.0,
+          "y": 0.0,
+          "deps": [
+            "q3_power_grid"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:bronze_ingot",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:bronze_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 125
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_create_arm",
+          "title": "The Sorting Arm",
+          "description": "A Create Depot and Mechanical Arm can sort and route items automatically. Set up a basic sorting arm to separate your ores from your ingots. Automation saves lives, especially when you are scrambling for launch materials.",
+          "x": 1.0,
+          "y": 2.0,
+          "deps": [
+            "q3_create_water_wheel"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_carbon_fiber",
+          "title": "Carbon Weave",
+          "description": "Carbon Fiber is produced by heating charcoal or coal under extreme industrial pressure. Craft 8 Carbon Fiber using Tech Reborn's Implosion Compressor. This material is critical for rocket heat shields.",
+          "x": 2.0,
+          "y": 0.0,
+          "deps": [
+            "q3_alloy_smelter"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:carbon_fiber",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:carbon_fiber",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 125
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_brass_production",
+          "title": "Brass Era",
+          "description": "Brass requires zinc and copper alloyed together in a specific ratio. Feed crushed raw zinc and copper into a mixer with the right proportions. Brass is essential for Create's automation tier 2 components.",
+          "x": 2.0,
+          "y": 2.0,
+          "deps": [
+            "q3_create_arm",
+            "q3_alloy_smelter"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "create:brass_ingot",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "create:brass_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 100
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_carbon_mesh",
+          "title": "Structural Carbon Panels",
+          "description": "Carbon Mesh is woven Carbon Fiber pressed into structural panels. Produce 4 Carbon Mesh sheets — these are used directly in the Tier 1 rocket's body panels, providing thermal resistance during atmospheric escape.",
+          "x": 3.0,
+          "y": 0.0,
+          "deps": [
+            "q3_carbon_fiber"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:carbon_mesh",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:carbon_mesh",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_create_tier2",
+          "title": "Precision Automation",
+          "description": "Create's Brass Funnel and Brass Hand upgrade your automation lines significantly. With them, you can precisely extract items from belts and filter materials into the correct machines. Build both.",
+          "x": 3.0,
+          "y": 2.0,
+          "deps": [
+            "q3_brass_production"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "create:brass_hand",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "create:brass_hand",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 125
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_heating_coil",
+          "title": "Thermal Core",
+          "description": "The Cupronickel Heating Coil is the thermal heart of many Tech Reborn machines. It is made from copper and nickel dust. Craft one to upgrade your power infrastructure and enable high-temperature processes.",
+          "x": 3.0,
+          "y": -2.0,
+          "deps": [
+            "q3_carbon_mesh"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:cupronickel_heating_coil",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:cupronickel_heating_coil",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 125
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_rocket_components_1",
+          "title": "First Rocket Parts",
+          "description": "Your industrial base is now producing real materials. The Rocket Fin and Rocket Nose Cone are the first actual rocket components you can craft. Build one of each and hold them — the rocket shape is coming together.",
+          "x": 4.0,
+          "y": 0.0,
+          "deps": [
+            "q3_create_tier2",
+            "q3_carbon_mesh",
+            "q3_heating_coil"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:rocket_fin",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:rocket_fin",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 175
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_nose_cone",
+          "title": "Point of No Return",
+          "description": "The Rocket Nose Cone requires steel plates and iron rods assembled with precision. Craft two Nose Cones and inspect their geometry in your inventory. Symmetry in construction is everything at launch.",
+          "x": 5.0,
+          "y": 0.0,
+          "deps": [
+            "q3_rocket_components_1"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:rocket_nose_cone",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:rocket_nose_cone",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 175
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_steel_engine",
+          "title": "The Engine Wakes",
+          "description": "Ad Astra Steel Engines are the rocket's thrust mechanism. Each engine consumes fuel to generate the thrust needed to escape gravity. Build a Steel Engine — it is the heart that will launch you skyward.",
+          "x": 4.0,
+          "y": -2.0,
+          "deps": [
+            "q3_power_grid"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_engine",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_engine",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_oxygen_system",
+          "title": "Breathe In Space",
+          "description": "Your oxygen system determines how long you survive off-world. The Gas Tank stores breathable air. The Oxygen Gear routes it to your helmet. Craft both and equip them as a test run inside a sealed room.",
+          "x": 3.0,
+          "y": -4.0,
+          "deps": [
+            "q3_brass_production",
+            "q2_space_suit_preview"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:oxygen_gear",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:gas_tank",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_full_space_suit",
+          "title": "The Stellar Archetype Suit",
+          "description": "The full Ad Astra Space Suit seals your body from vacuum, cosmic radiation, and the void between worlds. Craft all four pieces. Without this suit, you will die the moment you breach the atmosphere.",
+          "x": 4.0,
+          "y": -4.0,
+          "deps": [
+            "q3_oxygen_system",
+            "q3_steel_engine"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:space_suit",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:space_suit",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 250
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_fuel_synthesis",
+          "title": "Combustion Chemistry",
+          "description": "Fuel does not exist naturally — it must be synthesized. The Oil Bucket provides raw petrochemical material. Process it through a refinery or heat source to obtain the Fuel Bucket — rocket propellant.",
+          "x": 6.0,
+          "y": 0.0,
+          "deps": [
+            "q3_nose_cone",
+            "q3_steel_engine"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:fuel_bucket",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:fuel_bucket",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_obsidilith_boss",
+          "title": "Heart of Obsidian",
+          "description": "The Obsidilith is a titan of compressed obsidian and void energy, summoned in underground arenas. Its Obsidian Heart powers the most heat-resistant alloys known. Defeat it — you will need that heart for the engine frame.",
+          "x": 6.0,
+          "y": -4.0,
+          "deps": [
+            "q2_void_blossom_hunt",
+            "q3_full_space_suit"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:obsidian_heart",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 350
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "bosses_of_mass_destruction:obsidilith",
+            "display_name": "Kharathul, the Obsidilith",
+            "attributes": {
+              "max_health": 280.0,
+              "attack_damage": 18.0,
+              "armor": 14.0,
+              "knockback_resistance": 0.8,
+              "movement_speed": 0.22,
+              "follow_range": 50.0
+            },
+            "bossbar_color": "red",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Obsidian Heart Core"
+          }
+        },
+        {
+          "id": "q3_engine_frame",
+          "title": "The Heartcore Engine Frame",
+          "description": "The Obsidian Heart emanates intense heat energy. Combined with Steel Plates and Iron Rods, it can be forged into the Engine Frame — the structural core of every rocket engine. You need one to complete your Tier 1 Rocket.",
+          "x": 7.0,
+          "y": -4.0,
+          "deps": [
+            "q3_obsidilith_boss"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:engine_frame",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [
+            {
+              "id": "",
+              "type": "shaped",
+              "pattern": [
+                "RPR",
+                "PEP",
+                "RPR"
+              ],
+              "key": {
+                "E": {
+                  "item": "bosses_of_mass_destruction:obsidian_heart"
+                },
+                "P": {
+                  "item": "ad_astra:steel_plate"
+                },
+                "R": {
+                  "item": "ad_astra:iron_rod"
+                }
+              },
+              "result": {
+                "item": "ad_astra:engine_frame",
+                "count": 1
+              }
+            }
+          ],
+          "content": null
+        },
+        {
+          "id": "q3_steel_tank",
+          "title": "Pressurized Fuel Tank",
+          "description": "Steel Tanks store rocket fuel in pressurized chambers. Craft two Steel Tanks to serve as the fuel reservoir for your Tier 1 Rocket. Without adequate fuel storage, your rocket will barely clear the treetops.",
+          "x": 7.0,
+          "y": 0.0,
+          "deps": [
+            "q3_fuel_synthesis",
+            "q3_engine_frame"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_tank",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:steel_tank",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 175
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q3_nether_gauntlet",
+          "title": "Fist of the Inferno",
+          "description": "The Nether Gauntlet erupts from glowstone formations deep in the Nether. Its Blazing Eye is a refined energy crystal that stabilizes high-temperature fuel combustion. You will need it for the Tier 1 rocket upgrade.",
+          "x": 8.0,
+          "y": 2.0,
+          "deps": [
+            "q3_steel_tank",
+            "q3_fuel_synthesis"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:blazing_eye",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 350
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "bosses_of_mass_destruction:gauntlet",
+            "display_name": "Garaxx, the Nether Gauntlet",
+            "attributes": {
+              "max_health": 240.0,
+              "attack_damage": 15.0,
+              "armor": 10.0,
+              "knockback_resistance": 0.65,
+              "movement_speed": 0.29,
+              "follow_range": 52.0
+            },
+            "bossbar_color": "blue",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Blazing Gauntlet Core"
+          }
+        },
+        {
+          "id": "q3_tier1_rocket_assembled",
+          "title": "Tier 1 Rocket: Assembled",
+          "description": "Every component is ready. The Steel Engine, Engine Frame, Nose Cones, Fins, Fuel Tanks, and your hard-won boss materials are assembled. Craft the Tier 1 Rocket in Ad Astra's workstation. You are standing on the pad. It is time.",
+          "x": 9.0,
+          "y": 0.0,
+          "deps": [
+            "q3_nether_gauntlet",
+            "q3_steel_tank",
+            "q3_engine_frame"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:tier_1_rocket",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [
+            {
+              "id": "",
+              "type": "shaped",
+              "pattern": [
+                "NAN",
+                "FEF",
+                "TTT"
+              ],
+              "key": {
+                "A": {
+                  "item": "bosses_of_mass_destruction:blazing_eye"
+                },
+                "E": {
+                  "item": "ad_astra:engine_frame"
+                },
+                "F": {
+                  "item": "ad_astra:rocket_fin"
+                },
+                "N": {
+                  "item": "ad_astra:rocket_nose_cone"
+                },
+                "T": {
+                  "item": "ad_astra:steel_tank"
+                }
+              },
+              "result": {
+                "item": "ad_astra:tier_1_rocket",
+                "count": 1
+              }
+            }
+          ],
+          "content": null
+        }
+      ]
+    },
+    {
+      "id": "ch4_space",
+      "title": "Chapter IV: Silence of the Void",
+      "quests": [
+        {
+          "id": "q4_launch",
+          "title": "T-Minus Zero",
+          "description": "Place your Tier 1 Rocket in a flat, open space. Load it with fuel. Equip your space suit and oxygen gear. Crouch-right-click to board. The moment you press launch, everything changes. You are leaving Earth.",
+          "x": 0.0,
+          "y": 0.0,
+          "deps": [
+            "q3_tier1_rocket_assembled"
+          ],
+          "tasks": [
+            {
+              "type": "dimension",
+              "dimension": "ad_astra:moon"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_first_steps",
+          "title": "One Small Step",
+          "description": "The moon's surface is pale regolith, ancient dust, and silence. No atmosphere. No sound. Every step echoes only in your helmet. Walk 100 blocks across the lunar surface and take in the view of the Earth above you.",
+          "x": 1.0,
+          "y": 0.0,
+          "deps": [
+            "q4_launch"
+          ],
+          "tasks": [
+            {
+              "type": "biome",
+              "biome": "ad_astra:lunar_wastelands"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:cheese",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_lunarian_contact",
+          "title": "First Contact",
+          "description": "Lunarians are the moon's native inhabitants — humanoid colonists from a long-dead civilization. They trade exotic materials unavailable anywhere on Earth. Find a Lunarian and make contact.",
+          "x": 2.0,
+          "y": 2.0,
+          "deps": [
+            "q4_first_steps"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "ad_astra:lunarian",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_nugget",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_desh_mining",
+          "title": "Desh Ore: Moon Metal",
+          "description": "The moon's crust hides Desh Ore — a dark, exotic metal that conducts stellar energy unlike anything on Earth. Mine raw Desh and bring it back to your workshop for processing.",
+          "x": 2.0,
+          "y": -2.0,
+          "deps": [
+            "q4_first_steps"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:raw_desh",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 250
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_desh_processing",
+          "title": "Desh: Refined and Ready",
+          "description": "Desh Ingots are refined from Raw Desh in a standard furnace or Tech Reborn's industrial smelter. Process 16 Desh Ingots. Their dark sheen will become rocket panels, engine parts, and armor that no Earth material can match.",
+          "x": 3.0,
+          "y": -2.0,
+          "deps": [
+            "q4_desh_mining"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_ingot",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_corrupted_lunarian",
+          "title": "Corruption on the Moon",
+          "description": "Corrupted Lunarians are former colonists twisted by void energy that seeped from below the lunar crust. They are aggressive and dangerous. Slay 5 to clear a safe perimeter around your landing site.",
+          "x": 2.0,
+          "y": 0.0,
+          "deps": [
+            "q4_first_steps"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "ad_astra:corrupted_lunarian",
+              "count": 5
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:charged_ender_pearl",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_lunar_base",
+          "title": "Lunar Outpost Alpha",
+          "description": "A base on the moon means a pressurized structure with breathable oxygen. Build a small sealed room on the moon and install an Oxygen Distributor. Breathe without a helmet inside.",
+          "x": 3.0,
+          "y": 0.0,
+          "deps": [
+            "q4_corrupted_lunarian",
+            "q4_desh_processing"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:large_gas_tank",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_desh_plates",
+          "title": "Moon-Metal Armor Plates",
+          "description": "Desh Plates are essential for Tier 2 rocket construction. Press Desh Ingots into plates using a Mechanical Press or Ad Astra's hammer. Produce 16 Desh Plates for your future rocket hull.",
+          "x": 4.0,
+          "y": -2.0,
+          "deps": [
+            "q4_desh_processing"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_plate",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_plate",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_lunarian_trade",
+          "title": "The Moon Market",
+          "description": "Lunarian traders carry exotic goods, including Ostrum Nuggets and sometimes Etrium fragments. Trade with a Lunarian Armorer or Weaponsmith to obtain rare materials unavailable on Earth.",
+          "x": 3.0,
+          "y": 2.0,
+          "deps": [
+            "q4_lunarian_contact"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_nugget",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_solar_power",
+          "title": "Solar Array: Lunar Edition",
+          "description": "Photovoltaic Etrium Cells generate EU from sunlight at 1.37x intensity with no atmosphere to filter it. Place 4 cells on your base exterior and hook them to a battery.",
+          "x": 4.0,
+          "y": 0.0,
+          "deps": [
+            "q4_lunar_base",
+            "q4_desh_plates"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:photovoltaic_etrium_cell",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:photovoltaic_etrium_cell",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 250
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_desh_engine",
+          "title": "Desh Engine: Built on the Moon",
+          "description": "The Desh Engine is the Tier 2 rocket's propulsion system. Build one on the moon using Desh Ingots and Plates smelted from lunar ore — your first purely off-world manufactured component.",
+          "x": 4.0,
+          "y": 2.0,
+          "deps": [
+            "q4_lunar_base"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_engine",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_engine",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_star_crawler_boss",
+          "title": "Brood Queen of the Craters",
+          "description": "Star Crawlers infest deep moon craters and abandoned Lunarian ruins. Their queen is enormous, armored in chitin that deflects ordinary weapons. Only an archetype warrior can prevail.",
+          "x": 4.0,
+          "y": -4.0,
+          "deps": [
+            "q4_corrupted_lunarian",
+            "q4_lunar_base"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_ingot",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "ad_astra:star_crawler",
+            "display_name": "Vox-Kharaal, the Brood-Queen",
+            "attributes": {
+              "max_health": 320.0,
+              "attack_damage": 20.0,
+              "armor": 12.0,
+              "knockback_resistance": 0.75,
+              "movement_speed": 0.26,
+              "follow_range": 55.0
+            },
+            "bossbar_color": "yellow",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Star Crawler Brood Shard"
+          }
+        },
+        {
+          "id": "q4_desh_tank",
+          "title": "Desh Pressure Tanks",
+          "description": "The Desh Tank is a high-pressure fuel tank capable of storing cryo-fuel and oxygen at lunar temperatures. Craft two Desh Tanks — the Tier 2 rocket requires them as its primary fuel storage system.",
+          "x": 5.0,
+          "y": -2.0,
+          "deps": [
+            "q4_star_crawler_boss",
+            "q4_desh_plates"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_tank",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:desh_tank",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 250
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_etrium_mining",
+          "title": "Etrium: The Stellar Metal",
+          "description": "Etrium Ingots are found deeper in the lunar crust, glowing faintly with concentrated stellar radiation. Mine Etrium Ore and smelt it. This rare metal is the basis for the most advanced space technology.",
+          "x": 5.0,
+          "y": 0.0,
+          "deps": [
+            "q4_desh_engine",
+            "q4_solar_power",
+            "q4_lunarian_trade"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrium_ingot",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrium_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_etrium_rod",
+          "title": "Etrium Rods: Stellar Spines",
+          "description": "Etrium Rods are precision-machined from Etrium Ingots and serve as the structural spine of advanced rocket engines. Craft 8 Etrium Rods using the Ad Astra workbench.",
+          "x": 6.0,
+          "y": 0.0,
+          "deps": [
+            "q4_etrium_mining"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrium_rod",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrium_rod",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_etrionic_capacitor",
+          "title": "Capacitor of the Stars",
+          "description": "The Etrionic Capacitor stores and releases stellar energy in controlled bursts — essential for the Tier 2 rocket's power regulation system. Craft 2 Capacitors and feel the energy pulse in your hands.",
+          "x": 6.0,
+          "y": -2.0,
+          "deps": [
+            "q4_etrium_rod",
+            "q4_desh_tank"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrionic_capacitor",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrionic_capacitor",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_etrionic_core",
+          "title": "The Stellar Core",
+          "description": "The Etrionic Core is the fusion of an Etrionic Capacitor and an Etrium Ingot under high-energy conditions. This is the heart of the Tier 2 Rocket engine system. Build one in the Ad Astra workbench.",
+          "x": 7.0,
+          "y": -2.0,
+          "deps": [
+            "q4_etrionic_capacitor"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrionic_core",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:etrionic_core",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 350
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_lunar_colossus",
+          "title": "The Lunar Colossus Falls",
+          "description": "Aethon was the last defender of the ancient Lunarian civilization, corrupted by void energies that twisted its kin. It guards the deepest moon crater where Ostrum veins lie. Defeat it to earn passage to the outer planets.",
+          "x": 7.0,
+          "y": 0.0,
+          "deps": [
+            "q4_etrionic_core",
+            "q4_star_crawler_boss"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "ad_astra:corrupted_lunarian",
+            "display_name": "Aethon, the Lunar Colossus",
+            "attributes": {
+              "max_health": 380.0,
+              "attack_damage": 22.0,
+              "armor": 16.0,
+              "knockback_resistance": 0.85,
+              "movement_speed": 0.23,
+              "follow_range": 60.0
+            },
+            "bossbar_color": "purple",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Lunar Sovereignty Shard"
+          }
+        },
+        {
+          "id": "q4_tier2_rocket",
+          "title": "Tier 2 Rocket: Beyond the Moon",
+          "description": "The Tier 2 Rocket carries you beyond the Moon. It requires Desh components, an Etrionic Core, and Desh Engines. Every material was earned by sweat and boss blood. Assemble it and mark this moment — humanity reaches further.",
+          "x": 8.0,
+          "y": 0.0,
+          "deps": [
+            "q4_lunar_colossus",
+            "q4_etrionic_core",
+            "q4_desh_engine"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:tier_2_rocket",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:tier_2_rocket",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 600
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q4_mars_reached",
+          "title": "Red Horizons: Mars Reached",
+          "description": "Mars. The red frontier. A world of raptors, sulfur creepers, and Pygro tribes. The Ti-69 is Ad Astra's planetary calculator, helping you plot trajectories beyond the Moon. Reach Mars and breathe its thin red atmosphere in your sealed suit.",
+          "x": 9.0,
+          "y": 0.0,
+          "deps": [
+            "q4_tier2_rocket"
+          ],
+          "tasks": [
+            {
+              "type": "dimension",
+              "dimension": "ad_astra:mars"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ti_69",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 700
+            }
+          ],
+          "recipes": [],
+          "content": null
+        }
+      ]
+    },
+    {
+      "id": "ch5_outer_planets",
+      "title": "Chapter V: Outer Planets",
+      "quests": [
+        {
+          "id": "q5_mars_survey",
+          "title": "Martian Survey",
+          "description": "Mars is a hostile frontier: razor wind, sulfur geysers, and Pygro warbands. Before you venture deeper, survey the surface biomes of the Martian wasteland. The data will help you locate Raw Ostrum veins.",
+          "x": 0.0,
+          "y": 0.0,
+          "deps": [
+            "q4_mars_reached"
+          ],
+          "tasks": [
+            {
+              "type": "biome",
+              "biome": "ad_astra:martian_wastelands"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_pygro_hunt",
+          "title": "Pygro Patrol",
+          "description": "Pygros are fierce Martian tribal warriors who have carved out territory across the red plains. Their Brutes carry stone weapons laced with mineral dust. Kill 5 Pygro to secure your landing perimeter.",
+          "x": 1.0,
+          "y": 2.0,
+          "deps": [
+            "q5_mars_survey"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "ad_astra:pygro",
+              "count": 5
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:raw_ostrum",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_sulfur_creepers",
+          "title": "Volatile Chemistry",
+          "description": "Sulfur Creepers explode in clouds of toxic gas rather than fire. Their detonations leave mineral deposits on the ground. Kill 5 Sulfur Creepers — the residue they leave has alchemical value.",
+          "x": 1.0,
+          "y": -2.0,
+          "deps": [
+            "q5_mars_survey"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "ad_astra:sulfur_creeper",
+              "count": 5
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 150
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_ostrum_mining",
+          "title": "Ostrum: Rose of the Red Planet",
+          "description": "Ostrum Ore runs in veins through Martian canyon floors, glowing with a rose-gold iridescence. Mine at least 8 Raw Ostrum. This alloy is the key to Tier 3 technology and netherite-tier space armor.",
+          "x": 2.0,
+          "y": 0.0,
+          "deps": [
+            "q5_pygro_hunt",
+            "q5_sulfur_creepers"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:raw_ostrum",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_ostrum_ingots",
+          "title": "Refined Rose Metal",
+          "description": "Smelt Raw Ostrum into Ostrum Ingots. Their rose-gold hue contains a crystal lattice that refracts extreme heat — perfect for suit linings and rocket fairings. Process 16 ingots.",
+          "x": 3.0,
+          "y": 0.0,
+          "deps": [
+            "q5_ostrum_mining"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_ingot",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_ostrum_plates",
+          "title": "Ostrum Hull Plates",
+          "description": "Press Ostrum Ingots into Plates using a Mechanical Press. Ostrum Plates are the hull material for Tier 3 and Tier 4 rockets and for the Netherite Space Suit upgrade. Make 16 plates.",
+          "x": 4.0,
+          "y": 0.0,
+          "deps": [
+            "q5_ostrum_ingots"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_plate",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_plate",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 200
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_ostrum_engine",
+          "title": "Ostrum Engine Ignition",
+          "description": "The Ostrum Engine burns cleaner and hotter than a Desh Engine, achieving orbital insertion without the thermal stress spikes that crack lesser engines. Craft one on Mars.",
+          "x": 4.0,
+          "y": 2.0,
+          "deps": [
+            "q5_ostrum_ingots"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_engine",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_engine",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_pygro_brute",
+          "title": "Brute Force Diplomacy",
+          "description": "Pygro Brutes are the elite warriors of the Pygro clans, larger and deadlier than their kin. Defeating one earns you tribal respect — and Ostrum Nuggets they use as ceremonial currency.",
+          "x": 2.0,
+          "y": 4.0,
+          "deps": [
+            "q5_pygro_hunt"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "ad_astra:pygro_brute",
+              "count": 3
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_nugget",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_netherite_suit",
+          "title": "Netherite Space Armour",
+          "description": "The Netherite Space Suit upgrades your basic Space Suit with Netherite and Ostrum Plate reinforcement. It provides fire resistance, increased oxygen capacity, and protection from planetary radiation. Craft the full set.",
+          "x": 5.0,
+          "y": 0.0,
+          "deps": [
+            "q5_ostrum_plates",
+            "q5_ostrum_engine"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:netherite_space_suit",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:netherite_space_suit",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_martian_raptor",
+          "title": "Raptor Hunt",
+          "description": "The Martian Raptors are cunning pack predators that ambush from behind canyon ridges. They are fast and coordinated. Defeat 5 Martian Raptors to clear the hunting grounds around your Martian outpost.",
+          "x": 3.0,
+          "y": 4.0,
+          "deps": [
+            "q5_pygro_brute"
+          ],
+          "tasks": [
+            {
+              "type": "kill",
+              "entity_type": "ad_astra:martian_raptor",
+              "count": 5
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_plate",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_war_shaman_boss",
+          "title": "The War-Shaman of Mars",
+          "description": "The Pygro War-Shaman leads the mightiest Pygro clan from a basalt fortress in the martian canyons. It channels volcanic Martian energy into devastating attacks. Defeat it and claim the Ostrum Engine Schematics it guards.",
+          "x": 5.0,
+          "y": 4.0,
+          "deps": [
+            "q5_martian_raptor",
+            "q5_netherite_suit"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_engine",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "ad_astra:pygro_brute",
+            "display_name": "Keth-Arak, the Pygro War-Shaman",
+            "attributes": {
+              "max_health": 420.0,
+              "attack_damage": 24.0,
+              "armor": 16.0,
+              "knockback_resistance": 0.85,
+              "movement_speed": 0.25,
+              "follow_range": 60.0
+            },
+            "bossbar_color": "red",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "War-Shaman Effigy"
+          }
+        },
+        {
+          "id": "q5_ostrum_tank",
+          "title": "Ostrum Pressure Vessels",
+          "description": "Calorite is found only in the volcanic regions of Venus and the deep gas giant moons. Before you can go further, you need a Tier 3 Rocket. This requires Ostrum Plates, Ostrum Engine, and an Ostrum Tank. Craft the tank first.",
+          "x": 6.0,
+          "y": 2.0,
+          "deps": [
+            "q5_war_shaman_boss",
+            "q5_netherite_suit"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_tank",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:ostrum_tank",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_industrial_circuit",
+          "title": "Industrial Guidance Brain",
+          "description": "The Tech Reborn Industrial Circuit is the brain of any advanced machine. Combining multiple Electronic Circuits, a Data Storage Chip, and Energy Crystals produces one. Craft 4 — the Tier 3 rocket guidance system needs them.",
+          "x": 6.0,
+          "y": 0.0,
+          "deps": [
+            "q5_ostrum_tank",
+            "q5_ostrum_engine",
+            "q5_ostrum_plates"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:industrial_circuit",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:industrial_circuit",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 350
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_energy_crystal",
+          "title": "Energy Crystals: Compressed Power",
+          "description": "The Energy Crystal concentrates EU into a dense shard that can be discharged into machines. Craft 4 Energy Crystals from Tech Reborn materials — they power the Tier 3 navigation computer.",
+          "x": 7.0,
+          "y": 0.0,
+          "deps": [
+            "q5_industrial_circuit"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:energy_crystal",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:energy_crystal",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_tier3_rocket",
+          "title": "Tier 3 Rocket: The Outer Reach",
+          "description": "Tier 3 rocket construction begins. The Ostrum Engine, Ostrum Plates, Ostrum Tank, and Industrial Circuits converge in Ad Astra's advanced workbench. Build your Tier 3 Rocket — this one can reach the gas giants.",
+          "x": 8.0,
+          "y": 0.0,
+          "deps": [
+            "q5_energy_crystal",
+            "q5_ostrum_tank"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:tier_3_rocket",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:tier_3_rocket",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 700
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_glacian_sovereign",
+          "title": "Sovereign of the Frozen Moon",
+          "description": "The Glacian Ram is a colossal ice-horned beast native to the frozen moons of the outer solar system. The Sovereign variant is ancient and enormous, its horns capable of shattering reinforced Desh plates. Defeat it for the Calorite Crystal it carries.",
+          "x": 9.0,
+          "y": 0.0,
+          "deps": [
+            "q5_tier3_rocket"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:raw_calorite",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 600
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "ad_astra:glacian_ram",
+            "display_name": "Solvarath, the Glacian Sovereign",
+            "attributes": {
+              "max_health": 480.0,
+              "attack_damage": 26.0,
+              "armor": 18.0,
+              "knockback_resistance": 0.9,
+              "movement_speed": 0.22,
+              "follow_range": 65.0
+            },
+            "bossbar_color": "blue",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Glacian Ice Crown"
+          }
+        },
+        {
+          "id": "q5_calorite_mining",
+          "title": "Calorite: Fire of the Outer Dark",
+          "description": "Raw Calorite ore glows faintly orange, radiating heat even in the frozen void. Mine and smelt it into Calorite Ingots. This material exists only in the outer system and is the final metal between you and the ultimate rocket.",
+          "x": 10.0,
+          "y": 0.0,
+          "deps": [
+            "q5_glacian_sovereign"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_ingot",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_ingot",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_calorite_plates",
+          "title": "Calorite Hull Plating",
+          "description": "Calorite Plates are dense, heat-radiating hull panels used exclusively in Tier 4 rocket construction. They are the only material that survives re-entry from deep orbit. Press 16 Calorite Plates.",
+          "x": 11.0,
+          "y": 0.0,
+          "deps": [
+            "q5_calorite_mining"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_plate",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_plate",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_calorite_engine",
+          "title": "Calorite Engine: Absolute Thrust",
+          "description": "The Calorite Engine burns at temperatures no other engine material can survive, generating more thrust per fuel unit than any previous engine tier. Craft one — it is the powerplant of the Tier 4 rocket.",
+          "x": 11.0,
+          "y": 2.0,
+          "deps": [
+            "q5_calorite_mining"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_engine",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_engine",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q5_calorite_tank",
+          "title": "Calorite Fuel Vessels",
+          "description": "The Calorite Tank withstands the thermal differentials of deep space travel. Two are needed for the Tier 4 rocket's fuel system. Craft them and prepare for the final ascent.",
+          "x": 12.0,
+          "y": 0.0,
+          "deps": [
+            "q5_calorite_plates",
+            "q5_calorite_engine"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_tank",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:calorite_tank",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        }
+      ]
+    },
+    {
+      "id": "ch6_endgame",
+      "title": "Chapter VI: The Moon Ascension",
+      "quests": [
+        {
+          "id": "q6_endgame_intro",
+          "title": "The Final Ascent",
+          "description": "You have crossed the solar system, defeated ancient guardians, and forged metals born from the hearts of distant moons. Now comes the true endgame: the Tier 4 Rocket — the most powerful vehicle ever built. The moon awaits your final claim.",
+          "x": 0.0,
+          "y": 0.0,
+          "deps": [
+            "q5_calorite_tank"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_jet_suit",
+          "title": "Stellar Archetype Jet Suit",
+          "description": "The Jet Suit is Ad Astra's ultimate personal propulsion system. Unlike the Space Suit, it provides active thrust in all dimensions and vacuum protection simultaneously. Craft the full set. This is the archetype's final form.",
+          "x": 1.0,
+          "y": -2.0,
+          "deps": [
+            "q6_endgame_intro"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:jet_suit",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:jet_suit",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_large_gas_tank",
+          "title": "Deep Breath",
+          "description": "The Large Gas Tank holds 10x more oxygen than the standard Gas Tank and is required for extended missions outside the inner solar system. Craft one and fill it from your base's oxygen distributor.",
+          "x": 1.0,
+          "y": 2.0,
+          "deps": [
+            "q6_endgame_intro"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:large_gas_tank",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:large_gas_tank",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 300
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_advanced_circuit",
+          "title": "Quantum Navigation Array",
+          "description": "Tech Reborn's Advanced Circuit integrates multiple data and energy layers into a single board. Craft 8 Advanced Circuits. They are required in the Tier 4 rocket's quantum navigation array, which calculates trajectory corrections faster than light delay.",
+          "x": 2.0,
+          "y": 0.0,
+          "deps": [
+            "q6_jet_suit",
+            "q6_large_gas_tank"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:advanced_circuit",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:advanced_circuit",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_tungstensteel",
+          "title": "Tungstensteel: Indestructible",
+          "description": "The Tungstensteel Ingot is Tech Reborn's hardest alloy — produced by combining steel and tungsten dust at extreme temperatures. It reinforces the Tier 4 rocket's structural frame. Craft 8 ingots.",
+          "x": 1.0,
+          "y": -4.0,
+          "deps": [
+            "q6_endgame_intro"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:tungstensteel_ingot",
+              "count": 8
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:tungstensteel_ingot",
+              "count": 4
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_tungstensteel_plates",
+          "title": "Structural Backbone",
+          "description": "Tungstensteel Plates are the structural backbone of the Tier 4 rocket frame. Press them in your Mechanical Press. These panels must be perfect — a single fracture at orbital velocity is catastrophic.",
+          "x": 3.0,
+          "y": -2.0,
+          "deps": [
+            "q6_tungstensteel",
+            "q6_advanced_circuit"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "techreborn:tungstensteel_plate",
+              "count": 16
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "techreborn:tungstensteel_plate",
+              "count": 8
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_xerathos_boss",
+          "title": "Xerathos, Sovereign of the Void",
+          "description": "Xerathos is a second, far older Obsidilith reborn in the deepest part of the End, fed on void energy for millennia. Its Void Sovereignty Core is the final exotic component needed to stabilize the Tier 4 rocket's quantum drive. There is no harder fight.",
+          "x": 4.0,
+          "y": -2.0,
+          "deps": [
+            "q6_tungstensteel_plates",
+            "q6_advanced_circuit"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:obsidian_heart",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 700
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "bosses_of_mass_destruction:obsidilith",
+            "display_name": "Xerathos, Sovereign of the Void",
+            "attributes": {
+              "max_health": 600.0,
+              "attack_damage": 30.0,
+              "armor": 20.0,
+              "knockback_resistance": 0.95,
+              "movement_speed": 0.21,
+              "follow_range": 70.0
+            },
+            "bossbar_color": "purple",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Void Sovereignty Core"
+          }
+        },
+        {
+          "id": "q6_soul_star",
+          "title": "Soul Star: The Gravity Seed",
+          "description": "The Soul Star is a rare drop from the Night Lich — a crystallized fragment of a thousand consumed souls. It is the energy source for the Tier 4 rocket's gravity drive. Hunt the Lich again and claim it.",
+          "x": 5.0,
+          "y": -2.0,
+          "deps": [
+            "q6_xerathos_boss"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:soul_star",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:soul_star",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_arch_lich_boss",
+          "title": "Vethkarath Ascendant: The Final Lich",
+          "description": "Vethkarath has returned, grown to a terrifying Ascendant state, feeding on the souls of the fallen since your last encounter. Its Necrotic Core is the final catalyst in the Tier 4 rocket's power chain. Defeat it permanently.",
+          "x": 6.0,
+          "y": 0.0,
+          "deps": [
+            "q6_soul_star",
+            "q6_large_gas_tank"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "bosses_of_mass_destruction:ancient_anima",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 700
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "graveyard:lich",
+            "display_name": "Vethkarath Ascendant, the Arch-Lich",
+            "attributes": {
+              "max_health": 550.0,
+              "attack_damage": 28.0,
+              "armor": 18.0,
+              "knockback_resistance": 0.9,
+              "movement_speed": 0.24,
+              "follow_range": 65.0
+            },
+            "bossbar_color": "green",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Arch-Lich Necrotic Core"
+          }
+        },
+        {
+          "id": "q6_cryo_fuel",
+          "title": "Cryogenic Propellant",
+          "description": "The Cryo Fuel Bucket is a hyper-cooled hydrogen propellant used exclusively in Tier 4 engines. It burns at maximum efficiency in the Calorite Engine. Obtain 2 Cryo Fuel Buckets by refining Hydrogen in a Tech Reborn cryogenic cell.",
+          "x": 6.0,
+          "y": -2.0,
+          "deps": [
+            "q6_arch_lich_boss",
+            "q5_calorite_tank"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:cryo_fuel_bucket",
+              "count": 2
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:cryo_fuel_bucket",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_tier4_rocket",
+          "title": "Tier 4 Rocket: Forged by Stars",
+          "description": "This is the recipe that ends the world's constraints. Every material gathered, every boss defeated, every planet visited — it all ends here. Place the components in Ad Astra's Tier 4 workbench and assemble the ultimate rocket.",
+          "x": 7.0,
+          "y": 0.0,
+          "deps": [
+            "q6_cryo_fuel",
+            "q6_arch_lich_boss",
+            "q6_xerathos_boss",
+            "q6_tungstensteel_plates"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:tier_4_rocket",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 1000
+            }
+          ],
+          "recipes": [
+            {
+              "id": "",
+              "type": "shaped",
+              "pattern": [
+                "NAN",
+                "FCF",
+                "TET"
+              ],
+              "key": {
+                "A": {
+                  "item": "bosses_of_mass_destruction:ancient_anima"
+                },
+                "C": {
+                  "item": "ad_astra:calorite_plate"
+                },
+                "E": {
+                  "item": "ad_astra:calorite_engine"
+                },
+                "F": {
+                  "item": "ad_astra:rocket_fin"
+                },
+                "N": {
+                  "item": "ad_astra:rocket_nose_cone"
+                },
+                "T": {
+                  "item": "ad_astra:calorite_tank"
+                }
+              },
+              "result": {
+                "item": "ad_astra:tier_4_rocket",
+                "count": 1
+              }
+            }
+          ],
+          "content": null
+        },
+        {
+          "id": "q6_vesnium_cell",
+          "title": "Vesnium Power Array",
+          "description": "The Photovoltaic Vesnium Cell is the most advanced power cell in Ad Astra, generating massive EU from even trace stellar radiation. Build 4 for your final space station to sustain the off-world colony indefinitely.",
+          "x": 8.0,
+          "y": 2.0,
+          "deps": [
+            "q6_tier4_rocket"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:photovoltaic_vesnium_cell",
+              "count": 4
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:photovoltaic_vesnium_cell",
+              "count": 2
+            },
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_zip_gun",
+          "title": "The Vacuum Sidearm",
+          "description": "The Zip Gun is Ad Astra's signature sidearm — a vacuum-rated weapon that fires without combustion, usable in any atmospheric pressure including none. Craft one for your final mission loadout.",
+          "x": 8.0,
+          "y": -2.0,
+          "deps": [
+            "q6_tier4_rocket"
+          ],
+          "tasks": [
+            {
+              "type": "item",
+              "id": "ad_astra:zip_gun",
+              "count": 1
+            }
+          ],
+          "rewards": [
+            {
+              "type": "item",
+              "id": "ad_astra:zip_gun",
+              "count": 1
+            },
+            {
+              "type": "xp",
+              "amount": 400
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_moon_warden_boss",
+          "title": "Lunaris, the Eternal Moon Warden",
+          "description": "The Moon Warden is the final guardian of the lunar sovereignty — an ancient Lunarian corrupted beyond recognition, grown to monstrous scale over millennia. It will never allow a surface-worlder to claim the moon. Prove it wrong.",
+          "x": 9.0,
+          "y": 0.0,
+          "deps": [
+            "q6_vesnium_cell",
+            "q6_zip_gun",
+            "q6_arch_lich_boss"
+          ],
+          "tasks": [],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 1000
+            },
+            {
+              "type": "item",
+              "id": "ad_astra:cheese",
+              "count": 8
+            }
+          ],
+          "recipes": [],
+          "content": {
+            "kind": "boss",
+            "entity": "ad_astra:corrupted_lunarian",
+            "display_name": "Lunaris, the Eternal Moon Warden",
+            "attributes": {
+              "max_health": 800.0,
+              "attack_damage": 35.0,
+              "armor": 22.0,
+              "knockback_resistance": 1.0,
+              "movement_speed": 0.2,
+              "follow_range": 80.0
+            },
+            "bossbar_color": "purple",
+            "token_item": "minecraft:nether_star",
+            "trigger": "totem",
+            "token_name": "Eternal Moon Sigil"
+          }
+        },
+        {
+          "id": "q6_moon_claimed",
+          "title": "The Moon is Yours",
+          "description": "You have defeated every guardian, crossed every frontier, built every rocket. Now stand on the moon's surface in your Jet Suit, plant your flag, and look back at the blue marble below. You are a Stellar Archetype. You always were.",
+          "x": 10.0,
+          "y": 0.0,
+          "deps": [
+            "q6_moon_warden_boss"
+          ],
+          "tasks": [
+            {
+              "type": "biome",
+              "biome": "ad_astra:lunar_wastelands"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 1500
+            },
+            {
+              "type": "command",
+              "command": "say @a The moon has been claimed by a Stellar Archetype!"
+            }
+          ],
+          "recipes": [],
+          "content": null
+        },
+        {
+          "id": "q6_epilogue",
+          "title": "Beyond the Stars: Epilogue",
+          "description": "The journey does not end here. Mars, Venus, the gas giants — they wait. Your archetype was built for this: not just to reach the stars, but to shape what happens there. The universe is an empty canvas. Paint it.",
+          "x": 11.0,
+          "y": 0.0,
+          "deps": [
+            "q6_moon_claimed"
+          ],
+          "tasks": [
+            {
+              "type": "checkmark"
+            }
+          ],
+          "rewards": [
+            {
+              "type": "xp",
+              "amount": 500
+            }
+          ],
+          "recipes": [],
+          "content": null
+        }
+      ]
+    }
+  ]
+}

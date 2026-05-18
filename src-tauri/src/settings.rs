@@ -17,14 +17,48 @@ pub struct Settings {
     /// Optional override for the Azure app client ID; falls back to
     /// `DEFAULT_MS_CLIENT_ID` when unset.
     pub ms_client_id: Option<String>,
+    /// UI theme preference: "light" | "dark" | "system". Unset = "system".
+    pub theme: Option<String>,
 }
 
-/// Effective Microsoft client ID: the user's override if set, else the
-/// built-in default. Always returns a usable value.
+/// Effective theme preference; always one of "light" | "dark" | "system".
+pub fn theme() -> String {
+    load()
+        .theme
+        .filter(|t| matches!(t.as_str(), "light" | "dark" | "system"))
+        .unwrap_or_else(|| "system".to_string())
+}
+
+/// Effective Anthropic key: the Settings value if set, else the
+/// `ANTHROPIC_API_KEY` environment variable (handy for `tauri dev`). A
+/// shipped app has no `.env`; Settings is the real mechanism.
+pub fn anthropic_key() -> Option<String> {
+    load()
+        .anthropic_api_key
+        .filter(|k| !k.trim().is_empty())
+        .or_else(|| {
+            std::env::var("ANTHROPIC_API_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty())
+        })
+}
+
+/// Effective Microsoft client ID. Resolution order:
+/// 1. Settings override (`ms_client_id` in settings.json / Settings UI)
+/// 2. `ANVIL_MS_CLIENT_ID` env var (handy in `tauri dev` via gitignored
+///    `.env`; lets you test launch with a known-approved client ID while
+///    Anvil's own ID is pending the Microsoft mce-reviewappid approval)
+/// 3. The built-in `DEFAULT_MS_CLIENT_ID`
+/// Always returns a usable value.
 pub fn ms_client_id() -> String {
     load()
         .ms_client_id
         .filter(|c| !c.trim().is_empty())
+        .or_else(|| {
+            std::env::var("ANVIL_MS_CLIENT_ID")
+                .ok()
+                .filter(|c| !c.trim().is_empty())
+        })
         .unwrap_or_else(|| DEFAULT_MS_CLIENT_ID.to_string())
 }
 
