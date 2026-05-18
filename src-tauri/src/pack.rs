@@ -645,43 +645,12 @@ pub fn version_floor_repins(
     (repins, issues)
 }
 
-/// Strip SemVer/Fabric build metadata for an exact-version compare: a leading
-/// `=`, then everything from the first `+` (build metadata, e.g. `+mc1.20.1`,
-/// `+build.1744`, `+kotlin.2.3.21`).
-fn strip_build_meta(s: &str) -> &str {
-    let s = s.trim();
-    let s = s.strip_prefix('=').unwrap_or(s);
-    match s.find('+') {
-        Some(i) => &s[..i],
-        None => s,
-    }
-}
-
-/// Is `constraint` an EXACT version pin (a single concrete version), not a
-/// range/wildcard/list? Deliberately strict: ANY range operator, wildcard,
-/// separator or bracket ⇒ NOT an exact pin ⇒ the caller does not flag it.
-/// Parsing real Fabric/Maven ranges is a false-positive tar pit; this Phase-1
-/// audit only acts where non-satisfaction is unambiguous.
-fn is_exact_pin(constraint: &str) -> bool {
-    let c = strip_build_meta(constraint);
-    !c.is_empty()
-        && !c.chars().any(|ch| {
-            ch.is_whitespace()
-                || matches!(
-                    ch,
-                    '>' | '<' | '~' | '^' | '*' | 'x' | 'X' | ',' | '|' | '[' | ']' | '(' | ')'
-                )
-        })
-}
-
-/// True only when `constraint` is an exact pin AND `present_version` (build
-/// metadata stripped from both) differs — i.e. a definite, unambiguous
-/// version conflict. Never returns true for a range/wildcard/unparseable
-/// constraint (no false positives).
-fn exact_pin_violation(present_version: &str, constraint: &str) -> bool {
-    is_exact_pin(constraint)
-        && strip_build_meta(present_version) != strip_build_meta(constraint)
-}
+// `strip_build_meta` / `is_exact_pin` / `exact_pin_violation` were Step 5'd
+// away: an exact pin is a degenerate range, so the audit now routes through
+// the one Fabric version engine (`crate::version::{VersionReq::is_exact,
+// satisfies}`) instead of bespoke string surgery. Their behaviour is
+// preserved (Exact is core-only on both sides by design) and proven by the
+// createairfabric leaf-drop / non-leaf-block tests below.
 
 /// Post-resolution exact-pin dependency audit. The resolver satisfies a
 /// dependency by modid PRESENCE, not version — so a mod that exact-pins an old
@@ -717,7 +686,17 @@ pub fn audit_version_satisfaction(
             continue;
         };
         for (modid, range) in &m.requires {
-            if !is_exact_pin(range) {
+            // One version engine (Step 5): an EXACT pin is a degenerate
+            // range. `is_exact()` replaces the old `is_exact_pin` syntactic
+            // classifier; `satisfies` of an `Exact` predicate is core-only on
+            // both sides (build ignored) — byte-equivalent to the old
+            // `strip_build_meta`/`exact_pin_violation` pair (Step 1 designed
+            // it so; locked by version.rs's asymmetry test). Ranges are NOT
+            // this audit's job — `check_version_constraints` handles them.
+            let Some(req) = crate::version::VersionReq::parse(range) else {
+                continue; // unparseable -> not an unambiguous exact pin
+            };
+            if !req.is_exact() {
                 continue;
             }
             let Some(&(prov_pid, prov_ver)) = provider.get(modid.as_str()) else {
@@ -726,8 +705,11 @@ pub fn audit_version_satisfaction(
             if !present.contains(prov_pid) || prov_ver.is_empty() {
                 continue; // provider not in closure, or version unknown (Forge): skip
             }
-            if !exact_pin_violation(prov_ver, range) {
-                continue;
+            let Some(pv) = crate::version::Version::parse(prov_ver) else {
+                continue; // provider version unparseable -> cannot judge
+            };
+            if crate::version::satisfies(&pv, &req) {
+                continue; // present version satisfies the exact pin -> fine
             }
             // Requester is a leaf iff no OTHER entry requires any modid it provides.
             let req_provides: HashSet<&str> =
@@ -2143,28 +2125,42 @@ mod tier2_tests {
         assert!(repins.is_empty());
     }
 
+    /// Step 5: the exact-pin classify+violation contract, retargeted onto
+    /// the one comparator (the deleted string helpers' guarantees, now via
+    /// `VersionReq::is_exact` + `satisfies`).
     #[test]
-    fn exact_pin_classification_and_violation() {
-        assert!(is_exact_pin("0.5.1-j-build.1631+mc1.20.1"));
-        assert!(is_exact_pin("1.20.1"));
-        assert!(is_exact_pin("=1.0.0"));
-        assert!(!is_exact_pin("*"));
-        assert!(!is_exact_pin(">=6.0.7"));
-        assert!(!is_exact_pin(">=1.0 <2.0"));
-        assert!(!is_exact_pin("1.2.x"));
-        assert!(!is_exact_pin("[1.0,2.0)"));
-        assert!(!is_exact_pin("1.0 || 2.0"));
-        assert!(exact_pin_violation(
-            "6.0.8.1+build.1744-mc1.20.1",
-            "0.5.1-j-build.1631+mc1.20.1"
-        ));
-        // same version, only build metadata differs -> NOT a violation
-        assert!(!exact_pin_violation(
-            "0.5.1-j-build.1631+other",
-            "0.5.1-j-build.1631+mc1.20.1"
-        ));
-        // a range constraint is never a violation (never false-positive)
-        assert!(!exact_pin_violation("6.0.8.1", ">=6.0.7"));
+    fn exact_pin_classification_and_violation_via_comparator() {
+        use crate::version::{satisfies, Version, VersionReq};
+        let exact = |s: &str| {
+            VersionReq::parse(s).map(|r| r.is_exact()).unwrap_or(false)
+        };
+        assert!(exact("0.5.1-j-build.1631+mc1.20.1"));
+        assert!(exact("1.20.1"));
+        assert!(exact("=1.0.0"));
+        assert!(!exact("*"));
+        assert!(!exact(">=6.0.7"));
+        assert!(!exact(">=1.0 <2.0"));
+        assert!(!exact("1.2.x"));
+        assert!(!exact("[1.0,2.0)"));
+        assert!(!exact("1.0 || 2.0"));
+        // Violation = present does NOT satisfy the exact pin; `Exact` is
+        // core-only on both sides (build ignored) — old-helper-equivalent.
+        let pin =
+            VersionReq::parse("0.5.1-j-build.1631+mc1.20.1").unwrap();
+        assert!(
+            !satisfies(
+                &Version::parse("6.0.8.1+build.1744").unwrap(),
+                &pin
+            ),
+            "different core -> violates the exact pin"
+        );
+        assert!(
+            satisfies(
+                &Version::parse("0.5.1-j-build.1631+other").unwrap(),
+                &pin
+            ),
+            "same core, only build differs -> NOT a violation"
+        );
     }
 
     #[test]

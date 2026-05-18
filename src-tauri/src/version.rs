@@ -7,12 +7,19 @@
 //! `fabric-language-kotlin` `+kotlin.X.Y.Z` tags), and the predicate syntax is a
 //! superset (bare exact, `.x` wildcards, Maven intervals, `||`/space AND).
 //!
-//! The resolver does not call this yet — later steps wire it in and delete the
-//! hand-rolled helpers it supersedes: `pack.rs::kotlin_major`,
-//! `pack.rs::strip_build_meta`, `pack.rs::is_exact_pin`,
-//! `pack.rs::exact_pin_violation`, `registry.rs::is_open_ended_range`,
-//! `pack.rs::version_compatible`. This module is able to express everything
-//! those do.
+//! The exact-pin string helpers it supersedes were deleted in Step 5
+//! (`pack.rs::strip_build_meta`/`is_exact_pin`/`exact_pin_violation` →
+//! `VersionReq::is_exact` + `satisfies`).
+//!
+//! **`pack.rs::kotlin_major` is NOT superseded and STAYS** (premise
+//! corrected in Step 4). It looks like this module should subsume it, but
+//! it cannot: IPN/libIPN declare an OPEN-ENDED `>=1.9.2+kotlin.1.8.10` with
+//! no upper bound, and correct general semver SATISFIES that with Kotlin-2.x
+//! (core `1.13 > 1.9`). The Kotlin-major break "has no metadata expressing
+//! it" (resolver memory #2) — the FLK floor is structural inference on top
+//! of what the dependent wrote, not something a matcher can recover from the
+//! constraint text. This module only proves a kotlin band is expressible
+//! WHEN the bound is explicit; the real dependents never write that bound.
 //!
 //! # Version comparison order (THE canonical rule — later steps lean on this)
 //!
@@ -31,9 +38,10 @@
 //!   core (`9` < `13` at segment 2 — numeric, not lexical).
 //! * Build only breaks ties: `1.10.20+kotlin.1.9.24` <
 //!   `1.10.20+kotlin.2.0.0` because the cores tie and `kotlin` == `kotlin`
-//!   then `1` < `2` numerically. This is what makes `pack.rs::kotlin_major`
-//!   unnecessary — a "kotlin major >= 2" floor is just the ordinary predicate
-//!   `>=...+kotlin.2.0.0`.
+//!   then `1` < `2` numerically. This makes a kotlin band expressible *as a
+//!   range* — but only when an EXPLICIT upper bound is written; the real
+//!   IPN/libIPN constraint is unbounded, so `pack.rs::kotlin_major` is NOT
+//!   superseded (see the premise note above).
 //! * No-build vs build: `1.0.0` < `1.0.0+1` (missing build segment is `0`,
 //!   `0 < 1` numeric). Documented & tested so step 5 is not surprised.
 //!
@@ -46,9 +54,10 @@
 //! [`satisfies`] does NOT mirror `Ord` for the relational operators. A
 //! relational bound (`>= > <= <`) compares with build **only when the BOUND
 //! string itself specifies build metadata**:
-//! * `>=1.9.2+kotlin.1.8.10` — bound HAS `+kotlin…` ⇒ build participates, so
-//!   a "kotlin major ≥ 2" floor is just the ordinary predicate
-//!   `>=…+kotlin.2.0.0` (this is why `pack.rs::kotlin_major` is unnecessary).
+//! * `>=1.9.2+kotlin.1.8.10` — bound HAS `+kotlin…` ⇒ build participates.
+//!   (A *bounded* kotlin band is thus expressible as a range — but IPN's
+//!   real constraint is this UNBOUNDED form, which Kotlin-2.x satisfies, so
+//!   `pack.rs::kotlin_major` stays the floor; see the premise note above.)
 //! * `>0.5.13` — bound has NO build ⇒ **core-only**: the real jar
 //!   `0.5.13+mc1.20.1` is NOT `> 0.5.13` (its `+mc` is packaging metadata, not
 //!   an author-expressed ordering). Without this, Immersive Portals'
@@ -254,6 +263,18 @@ pub struct VersionReq {
 }
 
 impl VersionReq {
+    /// True iff this requirement is a single EXACT pin — one concrete
+    /// version, no range/wildcard/interval/OR/AND. This is the semantic
+    /// successor of `pack.rs::is_exact_pin`: the post-resolution exact-pin
+    /// audit acts only where non-satisfaction is unambiguous, and an `Exact`
+    /// predicate compares core-only on both sides (build metadata ignored —
+    /// see the module-level asymmetry note), which is exactly what the old
+    /// `strip_build_meta`/`exact_pin_violation` pair did.
+    pub fn is_exact(&self) -> bool {
+        matches!(self.or.as_slice(), [clause]
+            if matches!(clause.as_slice(), [Predicate::Exact(_)]))
+    }
+
     /// Parse a predicate string exactly as it appears in `fabric.mod.json`
     /// `depends`/`breaks` or Forge `mods.toml` `versionRange`.
     ///
@@ -710,12 +731,13 @@ mod tests {
     }
 
     #[test]
-    fn flk_kotlin_major_floor_is_an_ordinary_range() {
-        // The load-bearing claim: the comparator is orderable enough that a
-        // kotlin-tag bound is expressible as a NORMAL range — no `kotlin_major`
-        // integer extraction needed. (Core dominates, so the bound is taken on
-        // a core tie; the open-ended-major case is step 4's Tier-2 floor, not
-        // this module's concern.)
+    fn flk_bounded_kotlin_band_is_an_ordinary_range() {
+        // Proves CAPABILITY only: a kotlin band is expressible as a normal
+        // range WHEN an explicit upper bound is written. It does NOT make
+        // `pack.rs::kotlin_major` unnecessary — IPN's real constraint is the
+        // UNBOUNDED `>=…+kotlin.1.8.10` (no upper bound), which Kotlin-2.x
+        // satisfies; recovering that floor from the unbounded text is the
+        // FLK heuristic's job (Step 4 keeps it; see module premise note).
         assert!(v("1.10.20+kotlin.1.9.24") < v("1.13.11+kotlin.2.3.21"));
         assert!(v("1.10.20+kotlin.1.9.24") < v("1.10.20+kotlin.2.0.0"));
         let r = ">=1.10.20+kotlin.1.0.0 <1.10.20+kotlin.2.0.0";
@@ -882,8 +904,9 @@ mod tests {
                 &Version::parse("1.0.0+kotlin.2.3.21").unwrap(),
                 &kotlin_band
             ),
-            "a kotlin-major band still works via build-bearing bounds — \
-             `kotlin_major` remains unnecessary"
+            "a BOUNDED kotlin band works via build-bearing bounds (capability \
+             only — IPN's real constraint is unbounded, so pack.rs::\
+             kotlin_major stays the floor; see module premise note)"
         );
     }
 }
