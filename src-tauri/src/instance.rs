@@ -33,6 +33,18 @@ pub struct Instance {
     pub last_played: Option<String>,
     /// Frozen snapshot. Mutated only through a reviewed update diff.
     pub mods: Vec<PinnedMod>,
+    /// Project ids the user/agent explicitly chose (the resolver *roots*),
+    /// as opposed to dependencies pulled in transitively. `mods` is the
+    /// resolved closure; this records what to re-resolve from when a single
+    /// mod is added/removed via `edit_pack`.
+    ///
+    /// Back-compat: pre-`roots` instances deserialize with this empty. Callers
+    /// MUST treat an empty `roots` as "every `mods` project_id is a root"
+    /// (a safe over-approximation — it never drops a user-chosen mod, it only
+    /// makes orphan-pruning conservative until the next assemble/edit persists
+    /// an explicit set).
+    #[serde(default)]
+    pub roots: Vec<String>,
 }
 
 pub fn instance_dir(id: &str) -> PathBuf {

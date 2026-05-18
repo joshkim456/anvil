@@ -34,6 +34,9 @@ base64 = "0.22"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 zip = { version = "2", default-features = false, features = ["deflate", "bzip2", "time"] }
+# Decode mod item textures + encode rendered 3D-model icons. Already in the
+# build closure transitively (tauri muda/tray-icon/ico), so no extra cost.
+png = "0.18"
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
 tracing = "0.1"

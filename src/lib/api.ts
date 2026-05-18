@@ -359,4 +359,10 @@ export const api = {
     invoke<void>("save_quest_graph", { instanceId, graph }),
   validateQuestGraph: (instanceId: string, graph: QuestGraph) =>
     invoke<QuestIssue[]>("validate_quest_graph", { instanceId, graph }),
+  /** A `data:image/png;base64,...` URL for an item, or null if the icon
+   *  can't be resolved (vanilla without downloaded assets, 3D/builtin
+   *  model, or not present in any pinned jar) — caller renders a labeled
+   *  slot instead. Backed by an on-disk cache. */
+  getItemIcon: (instanceId: string, itemId: string) =>
+    invoke<string | null>("get_item_icon", { instanceId, itemId }),
 };

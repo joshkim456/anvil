@@ -106,13 +106,13 @@ How you work:
   - Structure it in chapters that are progression tiers/themes. Start with a small "Getting Started" hub chapter (basic tools, food, first ores). Then one themed questline chapter per MAJOR mod actually in this pack (study the assembled mod list and build an arc around each big mod: its starter item, its core machine/mechanic, an advanced build, a mastery goal). Finish with a milestone/endgame chapter whose quests depend on several mod chapters converging.
   - Scale to the pack: a kitchen-sink pack should get roughly 6 to 10 chapters and 40 to 80 quests; a focused pack fewer, but still tiered, never trivial. generate_quests will reject a graph that is too sparse, has orphan quests, or has chapters not wired into the rest, so make it genuinely interconnected.
   - Dependencies are the backbone. Almost every quest must have at least one prerequisite. Use convergence (a quest that requires 2+ earlier branches), gating (the reward of one quest is the item the next needs), and cross-chapter edges so mod questlines feed the milestone spine. Aim for at least one chapter that can only be entered after progress in two others. Keep at most one root (no-prereq) quest per chapter. The whole thing must stay a DAG (no cycles); every dep must point at a quest that exists.
-  - Per-quest quality: an evocative title (not "Quest 3"), a 1 to 3 sentence description with flavor and concrete how-to, tasks that escalate in difficulty across the chapter, and rewards that are genuinely useful, ideally handing over the item or resource the next quest needs, with occasional xp or a command reward for milestones. Vary task types across the pack: item, kill, advancement, biome, dimension, structure, recipe, and the occasional manual checkmark for roleplay beats. Invent cross-mod "integration" quests that combine items from multiple pinned mods (e.g. power one mod's machine with another mod's energy). DIFFICULTY IS TIERED T1 (first 10 minutes) to T5 (completionist/post-credits) and ENFORCED: chapter N (1-based) caps at tier min(N+1, 5); the final chapter may use T5. So Chapter 1 is T1 only — NEVER put hard advancements there (e.g. `adventuring_time`/visit-all-biomes = T5, `netherite_armor` = T4, any End content = T4+), and never make such a thing a Chapter-1 dependency. generate_quests REJECTS an over-hard early quest with `OverdifficultForChapter` (task, its tier, the chapter cap) on EVERY call — when you see it, replace that task with a chapter-appropriate one or move the quest to a later chapter.
+  - Per-quest quality: an evocative title (not "Quest 3"), a 1 to 3 sentence description with flavor and concrete how-to, tasks that escalate in difficulty across the chapter, and rewards that are genuinely useful, ideally handing over the item or resource the next quest needs, with occasional xp or a command reward for milestones. Vary task types across the pack: item, kill, advancement, biome, dimension, structure, recipe, and the occasional manual checkmark for roleplay beats. Invent cross-mod "integration" quests that combine items from multiple pinned mods (e.g. power one mod's machine with another mod's energy). DIFFICULTY IS TIERED T1 (first 10 minutes) to T5 (completionist/post-credits) and ENFORCED on EVERY call. Chapter 1 is the onboarding ramp and holds BOTH T1 and T2 quests (mix them freely). Every chapter AFTER chapter 1 is T3 or higher (NEVER T1/T2 again) and the ceiling rises gradually to T5 by the final chapter, scaled to how many chapters there are: chapter 2 sits around T3, the middle chapters ramp T3 toward T4, the final chapter may use T5. Keep hard advancements out of chapter 1 (e.g. `adventuring_time`/visit-all-biomes = T5, `netherite_armor` = T4, any End content = T4+), and never put a trivial T1/T2 task in any chapter past the first. generate_quests REJECTS an over-hard task with `OverdifficultForChapter` AND a too-trivial late task with `UnderdifficultForChapter` (task, its tier, the chapter cap/floor) on EVERY call: when you see either, retier the task or move the quest to the right chapter.
   - Build it in batches, not one giant call. Call generate_quests several times, roughly one to three chapters per call, in progression order (earlier tiers first) so each batch's dependencies point at quests already saved. Calls accumulate: a chapter with the same id replaces its previous version, new chapters are appended. When every chapter is in, make ONE last call with "final": true to run the full quality/interconnection check. Hard errors (unknown ids, missing deps, cycles) are reported on every call; the sparse/orphan/disconnected checks only run on the final call. If a call returns issues, fix them and call again.
   - Lay nodes on a readable grid: x increases with each progression tier, y separates parallel branches, about 2.0 units spacing. Only reference items, entities, and advancements from mods actually in the assembled pack; generate_quests rejects anything else.
 - Quality-of-life baseline (always raise this, and heavily suggest it). Early in the conversation, once you know the Minecraft version and loader, ask the player whether to include a standard quality-of-life and performance set, and strongly recommend saying yes (default to including it unless they decline). Fold it into the conversation as one light question, not a checklist. The set is: a recipe/item viewer (MANDATORY — see below), a minimap and a world map (Xaero's Minimap and Xaero's World Map), AppleSkin (food and saturation tooltips), Controlling (searchable keybinds), an inventory sorting mod, Mouse Tweaks, and a loader-appropriate performance stack that is compatible with content mods (on Fabric or Quilt: Sodium, plus Indium whenever the pack needs the Fabric Rendering API, plus Lithium, FerriteCore, and Entity Culling; on Forge or NeoForge the equivalents such as Embeddium or Rubidium, FerriteCore, and an entity-culling mod). Never use OptiFine, which breaks content mods. A recipe/item viewer is NOT optional and is NOT subject to the player declining the QoL set: EVERY pack that contains any crafting or machine content mod MUST include one, because without it the player literally cannot discover recipes (tech mods like Modern Industrialization, Tech Reborn, Create, AE2 are unusable without it). Always include EMI (the most broadly compatible viewer and the one tech mods explicitly recommend); JEI or REI are acceptable only if EMI has no compatible build for this version/loader. Search_mods for it and include it even if the player declined everything else. Mod names change between versions and loaders, so search_mods for the current mod that fills each role for THIS version and loader (for example the modern inventory-sorting mod is not the legacy 1.12 "Inventory Tweaks"); include only ones that actually exist and are compatible, skip any OTHER role with no good option for this version (but never skip the recipe viewer), and tell the player exactly which QoL mods you added. If the player signals weak or low-end hardware or a laptop, include the performance stack regardless and say so plainly.
 - Keep seed_from_pack natural. If the player points at an existing pack or asks for something like a known pack, use seed_from_pack to ground the build on a real pack, then adapt it with search_mods rather than copying it wholesale.
 - Be efficient with tools and converge decisively. In a single turn, issue several search_mods or get_mod calls together rather than one at a time. Do not search endlessly or narrate every step. Size the pack to the request: a focused pack is roughly 15 to 35 mods; a kitchen-sink or "as many as possible" request can be larger, but it is a curated set of quality mods, not a race to a number. Once you have a coherent set that covers the player's theme well, stop searching, call validate_pack, then assemble_pack. Do not keep searching to inflate the count, and do not re-assemble repeatedly chasing a bigger number; if the player asks for more after seeing a pack, add a few specific quality mods and re-assemble once. You have a hard limit on tool rounds, so converge and assemble well before you reach it; a good assembled pack now beats a perfect one that never finishes.
-- Iterating is expected and good. The player may keep talking after a pack is assembled and ask for changes. Treat that as normal: adjust the mod list and call assemble_pack again with the SAME pack name so it updates the existing instance in place rather than creating a duplicate. Only use a different name if the player clearly wants a separate, new pack.
+- Iterating is expected and good. The player may keep talking after a pack is assembled and ask for changes. Treat that as normal. For a focused change to an already-assembled pack — add a mod, remove a mod, swap one for another — call edit_pack with the ACTIVE PACK STATE instance id and only the delta (add:[{project_id}], remove:[project_id]); it pulls required deps, blocks conflicts, refuses an unsafe removal with the requiring mods named (then also remove those if the player insists), and keeps every other mod's exact version. Obey edit_pack's recoverable refusal/conflict messages exactly, then call it again. Use assemble_pack again (SAME pack name) only for a from-scratch rebuild or a large set change. Only use a different name if the player clearly wants a separate, new pack.
 
 Voice: concise and warm. No purple prose. No em dashes. Plain sentences, short paragraphs."#;
 
@@ -131,7 +131,7 @@ QUESTS. The quest system is Heracles (on Modrinth as "Odyssey Quests"); the pack
 
 - Chapters are progression tiers/themes: a small "Getting Started" hub, then one themed questline per MAJOR mod actually in the pack, then a milestone/endgame chapter whose quests converge several mod chapters. Kitchen-sink ~6 to 10 chapters / 40 to 80 quests; smaller for focused packs but still tiered.
 - Dependencies are the backbone: almost every quest has a prerequisite; use convergence, gating (a quest's reward is the next quest's needed item), and cross-chapter edges; at most one root quest per chapter; keep it a DAG.
-- Per quest: an evocative title, a 1 to 3 sentence description with flavor and concrete how-to, escalating tasks (vary types: item, kill, advancement, biome, dimension, structure, recipe, occasional checkmark), and useful rewards. Invent cross-mod integration quests. Difficulty is tiered T1–T5 and ENFORCED: chapter N caps at tier min(N+1,5) (final chapter may use T5). Chapter 1 is T1 only — no hard advancements (adventuring_time/all-biomes T5, netherite T4, End T4+) and never as a Chapter-1 dependency. generate_quests rejects over-hard early quests via OverdifficultForChapter; replace the task or move the quest later.
+- Per quest: an evocative title, a 1 to 3 sentence description with flavor and concrete how-to, escalating tasks (vary types: item, kill, advancement, biome, dimension, structure, recipe, occasional checkmark), and useful rewards. Invent cross-mod integration quests. Difficulty is tiered T1-T5 and ENFORCED every call. Chapter 1 holds BOTH T1 and T2 (onboarding ramp); every later chapter is T3+ (never T1/T2 again), the ceiling rising gradually to T5 by the final chapter scaled to chapter count (ch2 ~ T3, middle ramps to T4, final may use T5). No hard advancements in ch1 (adventuring_time/all-biomes T5, netherite T4, End T4+); no trivial T1/T2 task past ch1. generate_quests rejects over-hard tasks (OverdifficultForChapter) and too-trivial late tasks (UnderdifficultForChapter); retier the task or move the quest.
 - Build it with multiple generate_quests calls, one to three chapters per call in progression order; calls accumulate (same chapter id replaces, new ones append; deps may reference earlier-saved quests). Hard errors (unknown ids, missing deps, cycles) are checked every call; the sparse/orphan/disconnected quality gate runs only when you pass "final": true on the last call. Only reference items/entities/advancements from mods actually in the pack. If a call returns issues, fix and call again. Lay nodes on a grid: x = progression tier, y = parallel branch, about 2.0 units apart.
 
 RECIPE-BRIDGE NODES. Recipes are not a separate system: a quest NODE may carry a "recipes" array. Such a node becomes a quest to OBTAIN the bridged item AND injects that custom 1.20.1 recipe into an Open Loader datapack. This is what makes a kitchen-sink pack feel "expert": the questline narrates the tier gate, the embedded recipe makes the shortcut un-craftable so the player must walk the spine. Use these heavily on tech/skyblock packs and to gate a mod chapter behind another mod's output.
@@ -191,6 +191,7 @@ fn tool_specs_for(phase: &str) -> Value {
             "get_mod",
             "validate_pack",
             "assemble_pack",
+            "edit_pack",
             "verify_pack",
             "generate_quests",
             "generate_origins",
@@ -1198,6 +1199,34 @@ fn tool_specs() -> Value {
             }
         },
         {
+            "name": "edit_pack",
+            "description": "Safely ADD and/or REMOVE mods on an ALREADY-ASSEMBLED instance (post-assemble refinement: 'add JEI', 'remove sodium', 'swap X for Y'). Prefer this over assemble_pack for a single change — it re-resolves only what is needed and keeps every other mod's exact pinned version. Adds are dependency-complete (required deps are pulled in automatically) and conflict-checked; removes are reverse-dependency safe (a mod still required by a kept mod is REFUSED with the requiring set, never silently broken), and deps that only existed for a removed mod are auto-pruned. On refusal/conflict NOTHING is written and a recoverable explanation is returned — fix exactly that (e.g. also remove the requiring mods, or pick a compatible version) and call again. Do not hand-list the whole pack; pass only the delta. Not for imported (.mrpack) packs — those carry no Modrinth project ids, so there is nothing to resolve against; tell the player to rebuild it as a curated pack instead.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "instance_id": { "type": "string", "description": "The assembled instance id from assemble_pack." },
+                    "add": {
+                        "type": "array",
+                        "description": "Mods to add (their required dependencies are pulled in for you). Omit or [] to only remove.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "project_id": { "type": "string", "description": "Modrinth project id (or slug) to add." },
+                                "version_id": { "type": "string", "description": "OPTIONAL exact Modrinth version id. Omit to let the resolver pick the best version compatible with this pack's Minecraft version + loader." }
+                            },
+                            "required": ["project_id"]
+                        }
+                    },
+                    "remove": {
+                        "type": "array",
+                        "description": "Modrinth project ids to remove. A mod still required by a kept mod is refused (also remove the requiring mods to force it). Omit or [] to only add.",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["instance_id"]
+            }
+        },
+        {
             "name": "query_registry",
             "description": "Search the assembled pack's REAL registry (scanned offline from the resolved mod jars) for concrete ids to design against. Use this BEFORE referencing any item/entity/advancement/structure/biome/tag/recipe id in a quest or recipe, instead of recalling ids from memory: a fabricated id (e.g. an entity a mod does not actually have) is rejected by generate_quests, so query first and design only against ids this returns. Returns up to 50 matches as {id, label, source_mod}; pass an offset to page. If a mod's jar is not on disk yet its ids will not appear here (they are accepted low-confidence at generation time and flagged) — prefer ids this tool confirms.",
             "input_schema": {
@@ -1280,6 +1309,7 @@ async fn execute_tool(
         "get_mod" => tool_get_mod(mr, input, tx).await,
         "validate_pack" => tool_validate_pack(mr, input, tx).await,
         "assemble_pack" => tool_assemble_pack(mr, thread_id, input, tx).await,
+        "edit_pack" => tool_edit_pack(mr, thread_id, input, tx).await,
         "seed_from_pack" => tool_seed_from_pack(mr, input, tx).await,
         "generate_quests" => tool_generate_quests(thread_id, input, tx).await,
         "generate_origins" => tool_generate_origins(thread_id, input, tx).await,
@@ -2026,6 +2056,396 @@ async fn resolve_pack(
     .await
 }
 
+// ---------------------------------------------------------------------------
+// Safe incremental add / remove on an already-assembled instance.
+//
+// The only safe instance-mod mutation primitive. It NEVER mutates the
+// instance; it returns the resolved `EditResult` to persist, or an `EditError`
+// the agent can recover from. Safety is delegated to the real resolver rather
+// than a hand-rolled second dependency graph (the naive lib.rs append/retain
+// commands are the bug class this exists to avoid).
+// ---------------------------------------------------------------------------
+
+/// Outcome of a successful `edit_instance_mods`. The diff is computed against
+/// the instance's prior closure so the caller can report exactly what changed.
+#[derive(Debug)]
+struct EditResult {
+    /// The new resolved closure (raw resolver output). The caller maps this to
+    /// `PinnedMod` for `Instance.mods` and feeds it to `write_mrpack` — same
+    /// as `assemble_pack`, so persistence + serialization stay in one place.
+    pub entries: Vec<ModEntry>,
+    /// The new explicit root project_ids, ready to persist as `Instance.roots`.
+    pub roots: Vec<String>,
+    /// Mods explicitly added (a new root).
+    pub added: Vec<String>,
+    /// Dependencies pulled in transitively by the additions.
+    pub pulled_deps: Vec<String>,
+    /// Mods explicitly removed and now gone.
+    pub removed: Vec<String>,
+    /// Mods that fell out because the only thing that needed them was removed.
+    pub pruned_orphans: Vec<String>,
+    /// True iff the resolved closure AND root set are unchanged — the caller
+    /// must report "nothing changed" and skip every write (no registry re-dump).
+    pub noop: bool,
+}
+
+/// One refused removal: still required by other kept mods.
+#[derive(Debug)]
+struct StillRequired {
+    pub label: String,
+    /// Kept mods whose real jar manifests still require it. Empty when jar
+    /// metadata could not attribute it to a specific mod.
+    pub required_by: Vec<String>,
+}
+
+#[derive(Debug)]
+enum EditError {
+    /// One or more removals cannot be honored — still required by kept mods.
+    StillRequired(Vec<StillRequired>),
+    /// The resolved set has blocking issues (an add introduced an
+    /// incompatibility / unresolved dependency). The purely-informational
+    /// `IncompatibleAddonDropped` never appears here.
+    Conflicts(Vec<pack::ValidationIssue>),
+    /// Resolution itself failed (Modrinth unreachable, etc.).
+    Resolve(String),
+}
+
+/// Safely add and/or remove mods on an already-assembled instance.
+///
+/// - **Add is dependency-complete + conflict-checked** — required deps are
+///   pulled in; any incompatibility blocks (no bare append).
+/// - **Remove is reverse-dependency safe** — we re-resolve from the reduced
+///   root set; if a removed mod *reappears* in the closure a kept mod still
+///   requires it, so the removal is refused with that requiring set.
+/// - **Orphans auto-prune** — a dep that only existed because a removed mod
+///   needed it is simply not re-added, and is reported.
+async fn edit_instance_mods(
+    mr: &Modrinth,
+    inst: &Instance,
+    add: &[ModRef],
+    remove: &[String],
+) -> Result<EditResult, EditError> {
+    let mut vcache: VersionCache = std::collections::HashMap::new();
+    let mut scache: SideCache = std::collections::HashMap::new();
+    let mut scanned: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut provided: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut manifests: std::collections::HashMap<
+        String,
+        crate::registry::JarManifest,
+    > = std::collections::HashMap::new();
+    edit_instance_mods_with_state(
+        mr,
+        inst,
+        add,
+        remove,
+        &mut vcache,
+        &mut scache,
+        &mut scanned,
+        &mut provided,
+        &mut manifests,
+    )
+    .await
+}
+
+/// `edit_instance_mods`' body with the resolver state lifted to parameters —
+/// the offline test seam (mirrors `resolve_pack` → `resolve_pack_with_state`):
+/// tests pre-seed `vcache`/`manifests` from recorded Modrinth + real jar data
+/// so the REAL root math + REAL gates run on production-shaped data with no
+/// network. Production callers go through the empty-state wrapper above.
+#[allow(clippy::too_many_arguments)]
+async fn edit_instance_mods_with_state(
+    mr: &Modrinth,
+    inst: &Instance,
+    add: &[ModRef],
+    remove: &[String],
+    vcache: &mut VersionCache,
+    scache: &mut SideCache,
+    scanned: &mut std::collections::HashSet<String>,
+    provided: &mut std::collections::HashSet<String>,
+    manifests: &mut std::collections::HashMap<
+        String,
+        crate::registry::JarManifest,
+    >,
+) -> Result<EditResult, EditError> {
+    use std::collections::HashSet;
+
+    let remove_set: HashSet<&str> =
+        remove.iter().map(String::as_str).collect();
+
+    // roots0: explicit roots paired with their currently-pinned versions so
+    // re-resolving for ONE change does not silently bump every other mod.
+    // Back-compat: empty `roots` => treat every pinned mod as a root.
+    let roots0: Vec<ModRef> = if inst.roots.is_empty() {
+        inst.mods
+            .iter()
+            .filter(|m| !m.project_id.is_empty())
+            .map(|m| ModRef {
+                project_id: m.project_id.clone(),
+                version_id: m.version_id.clone(),
+            })
+            .collect()
+    } else {
+        inst.roots
+            .iter()
+            .filter(|p| !p.is_empty())
+            .map(|pid| ModRef {
+                project_id: pid.clone(),
+                version_id: inst
+                    .mods
+                    .iter()
+                    .find(|m| &m.project_id == pid)
+                    .map(|m| m.version_id.clone())
+                    .unwrap_or_default(),
+            })
+            .collect()
+    };
+
+    // An add without an explicit version_id must be pinned to a concrete best
+    // compatible version NOW: a ROOT pin needs a version (the resolver only
+    // auto-picks for a transitive dep, not a root). Same selection
+    // assemble/propose use (release < beta < alpha, then newest, then id).
+    // No compatible version => a real "cannot add" conflict, surfaced
+    // structured rather than as an opaque resolver error.
+    let mut add_resolved: Vec<ModRef> = Vec::with_capacity(add.len());
+    let mut unresolvable: Vec<pack::ValidationIssue> = Vec::new();
+    for a in add {
+        if a.project_id.is_empty() {
+            continue;
+        }
+        if !a.version_id.is_empty() {
+            add_resolved.push(ModRef {
+                project_id: a.project_id.clone(),
+                version_id: a.version_id.clone(),
+            });
+            continue;
+        }
+        let versions = match cached_versions(mr, vcache, &a.project_id).await
+        {
+            Ok(v) => v.clone(),
+            Err(e) => return Err(EditError::Resolve(e)),
+        };
+        let best = versions
+            .iter()
+            .filter(|v| {
+                v.game_versions.iter().any(|g| g == &inst.mc_version)
+                    && (v.loaders.iter().any(|l| l == &inst.loader)
+                        || (inst.loader == "quilt"
+                            && v.loaders.iter().any(|l| l == "fabric")))
+            })
+            .min_by(|x, y| {
+                vt_rank(&x.version_type)
+                    .cmp(&vt_rank(&y.version_type))
+                    .then(y.date_published.cmp(&x.date_published))
+                    .then(x.id.cmp(&y.id))
+            });
+        match best {
+            Some(v) => add_resolved.push(ModRef {
+                project_id: a.project_id.clone(),
+                version_id: v.id.clone(),
+            }),
+            None => {
+                unresolvable.push(
+                    pack::ValidationIssue::IncompatibleGameVersion {
+                        project_id: a.project_id.clone(),
+                        want: inst.mc_version.clone(),
+                    },
+                );
+            }
+        }
+    }
+    if !unresolvable.is_empty() {
+        return Err(EditError::Conflicts(unresolvable));
+    }
+
+    // new_roots = (roots0 - remove) ∪ add. Adds come FIRST so an add of an
+    // already-present project can re-pin its version (mirrors `merge_roots`:
+    // the explicit call wins a project_id collision).
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut new_roots: Vec<ModRef> = Vec::new();
+    for r in &add_resolved {
+        if remove_set.contains(r.project_id.as_str()) {
+            continue;
+        }
+        if seen.insert(r.project_id.clone()) {
+            new_roots.push(ModRef {
+                project_id: r.project_id.clone(),
+                version_id: r.version_id.clone(),
+            });
+        }
+    }
+    for r in roots0 {
+        if remove_set.contains(r.project_id.as_str()) {
+            continue;
+        }
+        if seen.insert(r.project_id.clone()) {
+            new_roots.push(r);
+        }
+    }
+
+    // Resolve the new root set through the real resolver (transitive closure,
+    // version floor, conflict + audit). `manifests` is retained (real jar
+    // requires/provided) for the reverse-dependency attribution below.
+    let (entries, resolve_issues) = resolve_pack_with_state(
+        mr,
+        &new_roots,
+        &inst.mc_version,
+        &inst.loader,
+        vcache,
+        scache,
+        scanned,
+        provided,
+        manifests,
+    )
+    .await
+    .map_err(|e| EditError::Resolve(e.to_string()))?;
+
+    // ModEntry has only a path; PinnedMod carries a name. One pretty form for
+    // every diff label so add/pulled (from path) and removed/pruned (from the
+    // stored name) read consistently.
+    let pretty = |s: &str| -> String {
+        s.strip_prefix("mods/")
+            .unwrap_or(s)
+            .trim_end_matches(".jar")
+            .to_string()
+    };
+
+    // --- Gate 1: a removal that re-appears is still required ---------------
+    let mut still: Vec<StillRequired> = Vec::new();
+    for rp in remove {
+        let Some(culprit) = entries.iter().find(|e| &e.project_id == rp)
+        else {
+            continue; // genuinely gone — good
+        };
+        // Modids the removed project provides (from its real jar manifest).
+        let provided_ids: Vec<String> = manifests
+            .get(rp)
+            .map(|m| m.provided.clone())
+            .unwrap_or_default();
+        // Any kept mod whose jar manifest still requires one of those modids.
+        let mut required_by: Vec<String> = Vec::new();
+        if !provided_ids.is_empty() {
+            for e in &entries {
+                if &e.project_id == rp {
+                    continue;
+                }
+                if let Some(man) = manifests.get(&e.project_id) {
+                    if man.requires.iter().any(|(modid, _)| {
+                        provided_ids.iter().any(|p| p == modid)
+                    }) {
+                        required_by.push(pretty(&e.path));
+                    }
+                }
+            }
+        }
+        required_by.sort();
+        required_by.dedup();
+        still.push(StillRequired {
+            label: pretty(&culprit.path),
+            required_by,
+        });
+    }
+    if !still.is_empty() {
+        return Err(EditError::StillRequired(still));
+    }
+
+    // --- Gate 2: blocking validation issues -------------------------------
+    // Gate on the SAME combined view assemble_pack/validate_pack use: the
+    // resolver's dep-level issues PLUS per-entry validate_pack checks
+    // (game-version / loader / side / dup / insecure). Without the combine an
+    // added mod incompatible with the pack's MC version would slip the gate.
+    // Mirror assemble_pack: everything blocks except the purely-informational
+    // IncompatibleAddonDropped (its conflicting addon was already removed).
+    let issues = combined_issues(
+        &entries,
+        resolve_issues,
+        &inst.mc_version,
+        &inst.loader,
+    );
+    let blocking: Vec<pack::ValidationIssue> = issues
+        .into_iter()
+        .filter(|i| {
+            !matches!(
+                i,
+                pack::ValidationIssue::IncompatibleAddonDropped { .. }
+            )
+        })
+        .collect();
+    if !blocking.is_empty() {
+        return Err(EditError::Conflicts(blocking));
+    }
+
+    // --- Build the diff + pinned closure ----------------------------------
+    let old: HashSet<&str> =
+        inst.mods.iter().map(|m| m.project_id.as_str()).collect();
+    let new_pids: HashSet<&str> =
+        entries.iter().map(|e| e.project_id.as_str()).collect();
+    let root_pids: HashSet<&str> =
+        new_roots.iter().map(|r| r.project_id.as_str()).collect();
+
+    let mut added = Vec::new();
+    let mut pulled_deps = Vec::new();
+    for e in &entries {
+        if !old.contains(e.project_id.as_str()) {
+            if root_pids.contains(e.project_id.as_str()) {
+                added.push(pretty(&e.path));
+            } else {
+                pulled_deps.push(pretty(&e.path));
+            }
+        }
+    }
+    let mut removed = Vec::new();
+    let mut pruned_orphans = Vec::new();
+    for m in &inst.mods {
+        if !new_pids.contains(m.project_id.as_str()) {
+            if remove_set.contains(m.project_id.as_str()) {
+                removed.push(pretty(&m.name));
+            } else {
+                pruned_orphans.push(pretty(&m.name));
+            }
+        }
+    }
+
+    // noop: resolved closure (project_id+version_id multiset) AND root set
+    // unchanged. Caller skips every write (no needless registry re-dump).
+    let same_closure = {
+        let mut a: Vec<(&str, &str)> = inst
+            .mods
+            .iter()
+            .map(|m| (m.project_id.as_str(), m.version_id.as_str()))
+            .collect();
+        let mut b: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|e| (e.project_id.as_str(), e.version_id.as_str()))
+            .collect();
+        a.sort();
+        b.sort();
+        a == b
+    };
+    let new_root_ids: Vec<String> =
+        new_roots.iter().map(|r| r.project_id.clone()).collect();
+    let old_root_ids: HashSet<&str> = if inst.roots.is_empty() {
+        inst.mods.iter().map(|m| m.project_id.as_str()).collect()
+    } else {
+        inst.roots.iter().map(String::as_str).collect()
+    };
+    let same_roots = new_root_ids.len() == old_root_ids.len()
+        && new_root_ids
+            .iter()
+            .all(|p| old_root_ids.contains(p.as_str()));
+
+    Ok(EditResult {
+        entries,
+        roots: new_root_ids,
+        added,
+        pulled_deps,
+        removed,
+        pruned_orphans,
+        noop: same_closure && same_roots,
+    })
+}
+
 /// `resolve_pack`'s body with the per-resolution caches + jar-scan state lifted
 /// to parameters. The only reason this seam exists: tests pre-seed `vcache`
 /// (from a recorded Modrinth snapshot) so `cached_versions`' `contains_key`
@@ -2604,6 +3024,78 @@ async fn tool_validate_pack(
     Ok(serde_json::to_string(&issues)?)
 }
 
+/// Fire the Slice-1.5 registry-dump pass for `id` in a detached task. Shared
+/// by `assemble_pack` and `edit_pack` so the grounding cache
+/// (`<instance>/anvil-registry.json`) is refreshed whenever the pinned mod set
+/// changes.
+///
+/// DETACHED on purpose: booting a headless dedicated server is slow and
+/// best-effort — it must NEVER delay the caller. If it fails for ANY reason
+/// the on-disk registry is left exactly as it was (grounding silently keeps
+/// using the static scan); the next assemble/edit re-triggers it.
+///
+/// GATE: skip only when the cache is already a `DumpReconciled` match for the
+/// CURRENT pins (re-dumping that is wasted work). `edit_pack` deletes the
+/// cache first, so after an edit this always runs.
+fn spawn_registry_dump_detached(
+    id: String,
+    inst: Instance,
+    mr: Modrinth, // `Modrinth: Clone`; a borrow cannot cross the spawn
+) {
+    tokio::spawn(async move {
+        let cache_path = instance_dir(&id).join("anvil-registry.json");
+        let key = crate::registry::mod_set_key(&inst);
+        // Gate read. Parse failure / absent => run (no usable cache). A
+        // matching DumpReconciled cache => skip.
+        if let Ok(txt) = std::fs::read_to_string(&cache_path) {
+            if let Ok(c) =
+                serde_json::from_str::<crate::registry::ScanResult>(&txt)
+            {
+                if c.mod_set_key == key
+                    && c.source == crate::registry::ScanSource::DumpReconciled
+                {
+                    return; // already reconciled for these pins.
+                }
+            }
+        }
+
+        // No AppHandle here (detached): a throwaway LaunchEvent channel whose
+        // receiver is dropped — sends fail silently, which is fine (progress
+        // is non-essential for a background pass).
+        let (ltx, lrx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::launch::LaunchEvent,
+        >();
+        drop(lrx);
+
+        let dump =
+            match crate::launch::registry_dump_pass(&inst, &mr, ltx).await {
+                Ok(d) => d,
+                // registry_dump_pass already degrades internally; an Err here
+                // is unexpected but still must not touch the cache.
+                Err(_) => return,
+            };
+        // Only a real dump rewrites the cache (degrade => leave static).
+        let Some(dump_dir) = dump else { return };
+
+        // Reconcile the CURRENT static scan with the live dump, then
+        // atomically replace the cache (temp file + rename) so a crash
+        // mid-write never leaves a half-written, mis-parsed registry.
+        let static_scan =
+            crate::registry::scan_instance(&inst, &instance_dir(&id));
+        let reconciled =
+            crate::registry::reconcile_scan(static_scan, Some(&dump_dir));
+        if let Ok(txt) = serde_json::to_string(&reconciled) {
+            let tmp = cache_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, &txt).is_ok() {
+                let _ = std::fs::rename(&tmp, &cache_path);
+            }
+        }
+        // The throwaway server dir is large; reclaim it (non-fatal).
+        let _ =
+            std::fs::remove_dir_all(instance_dir(&id).join(".anvil-dump"));
+    });
+}
+
 async fn tool_assemble_pack(
     mr: &Modrinth,
     thread_id: Option<&str>,
@@ -2761,6 +3253,11 @@ async fn tool_assemble_pack(
         created,
         last_played,
         mods: pinned,
+        // The explicitly-chosen roots (post-merge). `mods` above is the
+        // resolved closure; this records what `edit_pack` re-resolves from so
+        // a single add/remove is dependency-correct. `merge_roots` already
+        // dropped empty project_ids, so this is the clean root set.
+        roots: refs.iter().map(|r| r.project_id.clone()).collect(),
     };
 
     save_instance(&inst).with_context(|| format!("saving instance {id}"))?;
@@ -2787,87 +3284,10 @@ async fn tool_assemble_pack(
         crate::chat::clear_candidate(tid);
     }
 
-    // Slice 1.5 — PRIMARY first-launch registry-dump trigger.
-    //
-    // DETACHED on purpose: booting a headless dedicated server is slow
-    // (download + JVM) and best-effort. It must NEVER delay this tool's
-    // return or block the player; if it fails for ANY reason the static
-    // `anvil-registry.json` (grounding's source of truth) is left exactly as
-    // it was, so grounding silently keeps using the static scan. The next
-    // assemble re-triggers it (the gate below re-checks).
-    //
-    // GATE: only run when this instance's registry cache is ABSENT or still
-    // `Static` for the CURRENT pinned mod set — a `DumpReconciled` cache that
-    // already matches the pins is authoritative, re-dumping it is wasted work.
-    {
-        let inst_for_dump = inst.clone();
-        let mr_for_dump = mr.clone(); // `Modrinth: Clone`; `&mr` cannot cross spawn
-        let dump_id = id.clone();
-        tokio::spawn(async move {
-            let cache_path =
-                instance_dir(&dump_id).join("anvil-registry.json");
-            let key = crate::registry::mod_set_key(&inst_for_dump);
-            // Gate read. A parse failure / absent file => run (treat as no
-            // usable cache). A matching DumpReconciled cache => skip.
-            if let Ok(txt) = std::fs::read_to_string(&cache_path) {
-                if let Ok(c) = serde_json::from_str::<
-                    crate::registry::ScanResult,
-                >(&txt)
-                {
-                    if c.mod_set_key == key
-                        && c.source
-                            == crate::registry::ScanSource::DumpReconciled
-                    {
-                        return; // already reconciled for these pins.
-                    }
-                }
-            }
-
-            // No AppHandle here (detached): a throwaway LaunchEvent channel
-            // whose receiver is dropped — sends fail silently, which is fine
-            // (progress is non-essential for a background pass).
-            let (ltx, lrx) =
-                tokio::sync::mpsc::unbounded_channel::<crate::launch::LaunchEvent>();
-            drop(lrx);
-
-            let dump = match crate::launch::registry_dump_pass(
-                &inst_for_dump,
-                &mr_for_dump,
-                ltx,
-            )
-            .await
-            {
-                Ok(d) => d,
-                // registry_dump_pass already degrades internally; an Err here
-                // is unexpected but still must not touch the cache.
-                Err(_) => return,
-            };
-            // Only a real dump rewrites the cache (degrade => leave static).
-            let Some(dump_dir) = dump else { return };
-
-            // Reconcile the CURRENT static scan with the live dump, then
-            // atomically replace the cache (temp file + rename) so a crash
-            // mid-write never leaves a half-written, mis-parsed registry.
-            let static_scan = crate::registry::scan_instance(
-                &inst_for_dump,
-                &instance_dir(&dump_id),
-            );
-            let reconciled = crate::registry::reconcile_scan(
-                static_scan,
-                Some(&dump_dir),
-            );
-            if let Ok(txt) = serde_json::to_string(&reconciled) {
-                let tmp = cache_path.with_extension("json.tmp");
-                if std::fs::write(&tmp, &txt).is_ok() {
-                    let _ = std::fs::rename(&tmp, &cache_path);
-                }
-            }
-            // The throwaway server dir is large; reclaim it (non-fatal).
-            let _ = std::fs::remove_dir_all(
-                instance_dir(&dump_id).join(".anvil-dump"),
-            );
-        });
-    }
+    // Slice 1.5 registry-dump trigger (detached, best-effort). Shared with
+    // edit_pack so the grounding cache is refreshed whenever the pinned mod
+    // set changes — see `spawn_registry_dump_detached`.
+    spawn_registry_dump_detached(id.clone(), inst.clone(), mr.clone());
 
     // Emit the chip before the success string so the UI shows the assembled
     // pack even while the assistant's wrap-up text is still streaming.
@@ -3092,6 +3512,272 @@ async fn tool_generate_origins(
          Do not call generate_origins again unless revising the whole set.",
         s.origins.len(),
         s.powers.len()
+    ))
+}
+
+/// The dir-scoped on-disk side of a successful edit: (a) prune jars no longer
+/// in the closure, (b) invalidate the stale grounding cache, (d) rewrite the
+/// `.mrpack`. Returns the updated `Instance` (mods + roots applied) for the
+/// caller to `save_instance`. Pure w.r.t. the global instances dir (everything
+/// is under the passed `dir`) so it is tempdir-testable.
+///
+/// (a) matters: the real launch path only ENSURES manifest jars — it never
+/// deletes one that left the manifest, so without this prune a removed mod
+/// would still load. Anvil fully owns `<inst>/mods/` (the manifest is the only
+/// source of truth) and launch re-materializes from cache, so a filename
+/// reconcile here is safe and self-healing (also clears a version-bumped mod's
+/// stale old jar).
+fn apply_edit_writes(
+    dir: &std::path::Path,
+    base: &Instance,
+    result: &EditResult,
+) -> std::io::Result<Instance> {
+    use std::collections::HashSet;
+
+    // (a) prune.
+    let keep: HashSet<String> = result
+        .entries
+        .iter()
+        .filter_map(|e| {
+            std::path::Path::new(&e.path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .collect();
+    if let Ok(rd) = std::fs::read_dir(dir.join("mods")) {
+        for ent in rd.flatten() {
+            let p = ent.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("jar") {
+                if let Some(f) = p.file_name().and_then(|s| s.to_str()) {
+                    if !keep.contains(f) {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                }
+            }
+        }
+    }
+
+    // (b) invalidate stale grounding cache.
+    let _ = std::fs::remove_file(dir.join("anvil-registry.json"));
+
+    // (c) build the updated instance (caller persists it).
+    let mut updated = base.clone();
+    updated.mods = result
+        .entries
+        .iter()
+        .map(|e| PinnedMod {
+            project_id: e.project_id.clone(),
+            version_id: e.version_id.clone(),
+            name: e
+                .path
+                .strip_prefix("mods/")
+                .unwrap_or(&e.path)
+                .to_string(),
+            path: e.path.clone(),
+            sha1: e.sha1.clone(),
+            sha512: e.sha512.clone(),
+            download_url: e.downloads.first().cloned().unwrap_or_default(),
+            file_size: e.file_size,
+        })
+        .collect();
+    updated.roots = result.roots.clone();
+
+    // (d) rewrite the .mrpack so launch/export stay consistent.
+    std::fs::create_dir_all(dir)?;
+    let mrpack_path = dir.join(format!("{}.mrpack", updated.name));
+    let meta = PackMeta {
+        name: updated.name.clone(),
+        version_id: "1.0.0".to_string(),
+        summary: updated.name.clone(),
+        mc_version: updated.mc_version.clone(),
+        loader_key: loader_key(&updated.loader),
+        loader_version: updated.loader_version.clone(),
+    };
+    write_mrpack(&meta, &result.entries, &mrpack_path).map_err(|e| {
+        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+    })?;
+
+    Ok(updated)
+}
+
+/// Safely add/remove mods on an already-assembled instance. Mirrors
+/// `tool_generate_origins`: parse → find instance → safe core → on failure a
+/// RECOVERABLE `Ok(string)` (the run_turn round loop is the repair loop) → on
+/// success do only safe local writes in a fixed order, then re-dump grounding.
+async fn tool_edit_pack(
+    mr: &Modrinth,
+    _thread_id: Option<&str>,
+    input: &Value,
+    tx: &UnboundedSender<CuratorEvent>,
+) -> anyhow::Result<String> {
+    let instance_id = str_field(input, "instance_id")?.to_string();
+
+    // add[]: {project_id, version_id?}. Bad shape => recoverable, not a hard
+    // error (the model fixes it and retries — same contract as generate_origins).
+    let mut add: Vec<ModRef> = Vec::new();
+    if let Some(arr) = input.get("add").and_then(Value::as_array) {
+        for item in arr {
+            let Some(pid) = item.get("project_id").and_then(Value::as_str)
+            else {
+                return Ok("edit_pack: every `add` entry needs a string \
+                     `project_id` (and an optional `version_id`). Fix and \
+                     call edit_pack again."
+                    .to_string());
+            };
+            add.push(ModRef {
+                project_id: pid.to_string(),
+                version_id: item
+                    .get("version_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+    }
+    let remove: Vec<String> = input
+        .get("remove")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if add.is_empty() && remove.is_empty() {
+        return Ok("edit_pack: nothing to do — give at least one `add` \
+             ([{project_id, version_id?}]) or one `remove` ([project_id])."
+            .to_string());
+    }
+
+    let _ = tx.send(CuratorEvent::Phase("assembled".to_string()));
+    tool_chip(tx, "edit_pack", "resolving");
+
+    let Some(inst) =
+        load_instances().into_iter().find(|i| i.id == instance_id)
+    else {
+        return Ok(format!(
+            "edit_pack: no instance found with id {instance_id}. Assemble \
+             the pack first."
+        ));
+    };
+
+    let result = match edit_instance_mods(mr, &inst, &add, &remove).await {
+        Ok(r) => r,
+        Err(EditError::Resolve(e)) => {
+            tool_chip(tx, "edit_pack", "blocked: resolve failed");
+            return Ok(format!(
+                "edit_pack: could not resolve the new mod set ({e}). This is \
+                 usually a transient Modrinth/network issue — tell the player \
+                 and try again shortly, or pick a different mod. Nothing was \
+                 changed."
+            ));
+        }
+        Err(EditError::StillRequired(items)) => {
+            tool_chip(tx, "edit_pack", "blocked: still required");
+            let lines: Vec<String> = items
+                .iter()
+                .map(|s| {
+                    if s.required_by.is_empty() {
+                        format!(
+                            "- {} is still pulled in as a dependency of \
+                             other mods in this pack (jar metadata could not \
+                             name the exact requirer); it cannot be removed \
+                             on its own.",
+                            s.label
+                        )
+                    } else {
+                        format!(
+                            "- {} is still required by: {}. To remove {}, \
+                             also remove those mods in the SAME edit_pack \
+                             call.",
+                            s.label,
+                            s.required_by.join(", "),
+                            s.label
+                        )
+                    }
+                })
+                .collect();
+            return Ok(format!(
+                "edit_pack refused: {} removal(s) would break the pack \
+                 (nothing was changed):\n{}\nEither keep these mods, or call \
+                 edit_pack again also removing the requiring mods.",
+                items.len(),
+                lines.join("\n")
+            ));
+        }
+        Err(EditError::Conflicts(issues)) => {
+            tool_chip(tx, "edit_pack", "blocked: conflicts");
+            return Ok(format!(
+                "edit_pack refused: the requested change introduces {} \
+                 blocking conflict(s) (nothing was changed). Choose a \
+                 compatible mod/version or drop the conflicting add, then \
+                 call edit_pack again:\n{}",
+                issues.len(),
+                serde_json::to_string(&issues)?
+            ));
+        }
+    };
+
+    if result.noop {
+        tool_chip(tx, "edit_pack", "no change");
+        return Ok(format!(
+            "edit_pack: no change — the resolved mod set for instance \
+             {instance_id} is identical to what it already has (the add(s) \
+             were already present and/or the remove(s) were not roots). \
+             Nothing was written."
+        ));
+    }
+
+    tool_chip(tx, "edit_pack", "writing");
+    let dir = instance_dir(&instance_id);
+    let updated = apply_edit_writes(&dir, &inst, &result)
+        .with_context(|| format!("applying edit to instance {instance_id}"))?;
+    save_instance(&updated)
+        .with_context(|| format!("saving instance {instance_id}"))?;
+
+    // (e) Refresh the grounding cache for the NEW pin set (detached).
+    spawn_registry_dump_detached(
+        instance_id.clone(),
+        updated.clone(),
+        mr.clone(),
+    );
+
+    tool_chip(tx, "edit_pack", "done");
+
+    let mut parts: Vec<String> = Vec::new();
+    if !result.added.is_empty() {
+        parts.push(format!("added {}", result.added.join(", ")));
+    }
+    if !result.pulled_deps.is_empty() {
+        parts.push(format!(
+            "pulled {} required dep(s): {}",
+            result.pulled_deps.len(),
+            result.pulled_deps.join(", ")
+        ));
+    }
+    if !result.removed.is_empty() {
+        parts.push(format!("removed {}", result.removed.join(", ")));
+    }
+    if !result.pruned_orphans.is_empty() {
+        parts.push(format!(
+            "auto-pruned {} now-unused dep(s): {}",
+            result.pruned_orphans.len(),
+            result.pruned_orphans.join(", ")
+        ));
+    }
+    Ok(format!(
+        "edit_pack: instance {instance_id} now has {} mods ({}). Instance, \
+         .mrpack and grounding cache updated. Tell the player exactly what \
+         changed and why — especially any auto-pulled deps or pruned mods.",
+        updated.mods.len(),
+        if parts.is_empty() {
+            "version re-pin".to_string()
+        } else {
+            parts.join("; ")
+        }
     ))
 }
 
@@ -4406,5 +5092,436 @@ mod flk_floor_real_data_tests {
                  repins and the hard gate must stay silent"
             );
         }
+    }
+}
+
+/// REAL recorded-data tests for the safe add/remove primitive
+/// (`edit_instance_mods`) + the dir-scoped writes (`apply_edit_writes`). Same
+/// discipline as `flk_floor_real_data_tests`: drive the offline test seam
+/// (`edit_instance_mods_with_state`) on production-shaped `Version`/jar data —
+/// the REAL resolver + REAL gates, no network, no synthetic dual-candidate
+/// pool. The 50-mod backfill test uses the actual shipped Stellar Origins pin
+/// list (`tests/fixtures/real/stellar_origins.instance.json`).
+#[cfg(test)]
+mod edit_pack_real_data_tests {
+    use super::*;
+    use crate::instance::{Instance, PinnedMod};
+    use crate::modrinth::Version;
+
+    const FIXT: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/real");
+
+    /// One real-shaped Version: the given pin, 1.20.1/fabric, one primary
+    /// file named `<pid>.jar`, optional REQUIRED Modrinth dependency edges
+    /// (project_id only → resolver picks best; exactly the production shape).
+    fn ver(pid: &str, vid: &str, mc: &str, req: &[&str]) -> Version {
+        let deps: Vec<serde_json::Value> = req
+            .iter()
+            .map(|d| {
+                serde_json::json!({"project_id": d, "dependency_type": "required"})
+            })
+            .collect();
+        let j = serde_json::json!([{
+            "id": vid, "project_id": pid, "name": vid,
+            "version_number": "1.0.0", "game_versions": [mc],
+            "version_type": "release", "loaders": ["fabric"],
+            "downloads": 0, "date_published": "2024-01-01T00:00:00Z",
+            "files": [{
+                "hashes": {"sha1": "0".repeat(40), "sha512": "0".repeat(128)},
+                "url": format!("https://cdn.modrinth.com/{pid}/{vid}.jar"),
+                "filename": format!("{pid}.jar"),
+                "primary": true, "size": 1
+            }],
+            "dependencies": deps
+        }]);
+        let mut v: Vec<Version> =
+            serde_json::from_value(j).expect("stub Version deserializes");
+        v.pop().unwrap()
+    }
+
+    /// Offline resolver state for an explicit pid→version map: `vcache` (the
+    /// network short-circuit), `scache` (sides), `scanned` (jar_augment
+    /// no-op). `manifests` is supplied per-test.
+    #[allow(clippy::type_complexity)]
+    fn offline(
+        pv: &[(&str, Version)],
+    ) -> (VersionCache, SideCache, std::collections::HashSet<String>) {
+        let mut vc: VersionCache = std::collections::HashMap::new();
+        let mut sc: SideCache = std::collections::HashMap::new();
+        let mut scn: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        for (pid, v) in pv {
+            vc.entry(pid.to_string())
+                .or_insert_with(|| Ok(vec![v.clone()]));
+            sc.insert(
+                pid.to_string(),
+                ("required".into(), "required".into()),
+            );
+            scn.insert(pid.to_string());
+        }
+        (vc, sc, scn)
+    }
+
+    fn pin(p: &str, v: &str) -> PinnedMod {
+        PinnedMod {
+            project_id: p.into(),
+            version_id: v.into(),
+            name: format!("{p}.jar"),
+            path: format!("mods/{p}.jar"),
+            sha1: String::new(),
+            sha512: String::new(),
+            download_url: String::new(),
+            file_size: 0,
+        }
+    }
+
+    fn instance(roots: &[&str], mods: &[(&str, &str)]) -> Instance {
+        Instance {
+            id: "t".into(),
+            name: "T".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15.0".into(),
+            created: "2024".into(),
+            last_played: None,
+            mods: mods.iter().map(|(p, v)| pin(p, v)).collect(),
+            roots: roots.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    async fn run(
+        inst: &Instance,
+        add: &[ModRef],
+        remove: &[String],
+        pv: &[(&str, Version)],
+        man: std::collections::HashMap<String, crate::registry::JarManifest>,
+    ) -> Result<EditResult, EditError> {
+        let (mut vc, mut sc, mut scn) = offline(pv);
+        let mut prov = std::collections::HashSet::new();
+        let mut man = man;
+        let mr = Modrinth::new();
+        edit_instance_mods_with_state(
+            &mr, inst, add, remove, &mut vc, &mut sc, &mut scn, &mut prov,
+            &mut man,
+        )
+        .await
+    }
+
+    fn add1(pid: &str) -> Vec<ModRef> {
+        vec![ModRef { project_id: pid.into(), version_id: String::new() }]
+    }
+
+    /// Old-shape instance (no `roots`) → backfill makes every pinned mod a
+    /// root; a no add/remove call on a self-consistent 50-mod REAL pack is a
+    /// pure noop. Proves the back-compat rule + noop short-circuit on real
+    /// shipped pins.
+    #[tokio::test]
+    async fn backfill_then_noop_on_real_50_mod_pack() {
+        let raw = std::fs::read_to_string(format!(
+            "{FIXT}/stellar_origins.instance.json"
+        ))
+        .expect("read stellar fixture");
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).expect("parse stellar");
+        let pins: Vec<(String, String)> = v["mods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                (
+                    m["project_id"].as_str().unwrap().to_string(),
+                    m["version_id"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(pins.len(), 50, "real instance has 50 pins");
+        let inst = Instance {
+            id: "s".into(),
+            name: "Stellar".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15.0".into(),
+            created: "x".into(),
+            last_played: None,
+            mods: pins.iter().map(|(p, v)| pin(p, v)).collect(),
+            roots: vec![], // OLD SHAPE — must backfill
+        };
+        let pv: Vec<(&str, Version)> = pins
+            .iter()
+            .map(|(p, v)| (p.as_str(), ver(p, v, "1.20.1", &[])))
+            .collect();
+        let r = run(&inst, &[], &[], &pv, Default::default())
+            .await
+            .expect("ok");
+        assert!(r.noop, "self-consistent pack, no delta => noop");
+        assert_eq!(r.roots.len(), 50, "empty roots backfilled to all mods");
+        assert_eq!(r.entries.len(), 50);
+        assert!(
+            r.added.is_empty()
+                && r.removed.is_empty()
+                && r.pruned_orphans.is_empty()
+        );
+    }
+
+    /// Remove a leaf root: gone from the closure, recorded in `removed`,
+    /// dropped from `roots`, not a noop.
+    #[tokio::test]
+    async fn remove_leaf_root() {
+        let inst = instance(&["A", "B"], &[("A", "a1"), ("B", "b1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("B", ver("B", "b1", "1.20.1", &[])),
+        ];
+        let r = run(&inst, &[], &["B".into()], &pv, Default::default())
+            .await
+            .expect("ok");
+        assert!(!r.noop);
+        assert!(r.entries.iter().any(|e| e.project_id == "A"));
+        assert!(!r.entries.iter().any(|e| e.project_id == "B"));
+        assert_eq!(r.removed, vec!["B".to_string()]);
+        assert_eq!(r.roots, vec!["A".to_string()]);
+    }
+
+    /// Reverse-dependency safety: B requires A (real Modrinth edge), so
+    /// removing A re-pulls it via B → refused, and the requirer is named from
+    /// B's REAL jar manifest (`requires` modid ∩ A's `provided`).
+    #[tokio::test]
+    async fn remove_still_required_is_refused_and_attributed() {
+        let inst = instance(&["A", "B"], &[("A", "a1"), ("B", "b1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("B", ver("B", "b1", "1.20.1", &["A"])),
+        ];
+        let mut man = std::collections::HashMap::new();
+        man.insert(
+            "A".to_string(),
+            crate::registry::JarManifest {
+                provided: vec!["amod".into()],
+                requires: vec![],
+                version: String::new(),
+            },
+        );
+        man.insert(
+            "B".to_string(),
+            crate::registry::JarManifest {
+                provided: vec![],
+                requires: vec![("amod".into(), "*".into())],
+                version: String::new(),
+            },
+        );
+        let e = run(&inst, &[], &["A".into()], &pv, man)
+            .await
+            .expect_err("must refuse");
+        match e {
+            EditError::StillRequired(v) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(v[0].label, "A");
+                assert!(
+                    v[0].required_by.iter().any(|r| r == "B"),
+                    "attributed to B from jar metadata, got {:?}",
+                    v[0].required_by
+                );
+            }
+            other => panic!("expected StillRequired, got {other:?}"),
+        }
+    }
+
+    /// Add is dependency-complete: NEW requires DEP → both land; NEW is an
+    /// `added` root, DEP a non-root `pulled_deps`.
+    #[tokio::test]
+    async fn add_pulls_required_dependency() {
+        let inst = instance(&["A"], &[("A", "a1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("NEW", ver("NEW", "n1", "1.20.1", &["DEP"])),
+            ("DEP", ver("DEP", "d1", "1.20.1", &[])),
+        ];
+        let r = run(&inst, &add1("NEW"), &[], &pv, Default::default())
+            .await
+            .expect("ok");
+        assert!(r.entries.iter().any(|e| e.project_id == "NEW"));
+        assert!(r.entries.iter().any(|e| e.project_id == "DEP"));
+        assert!(r.added.contains(&"NEW".to_string()));
+        assert!(r.pulled_deps.contains(&"DEP".to_string()));
+        assert!(r.roots.contains(&"NEW".to_string()));
+        assert!(!r.roots.contains(&"DEP".to_string()));
+    }
+
+    /// The `combined_issues` fix: an added mod with NO version compatible
+    /// with the pack's MC must NOT slip the gate silently — it is blocked
+    /// (or, at minimum, never silently added).
+    #[tokio::test]
+    async fn add_incompatible_game_version_is_not_silently_accepted() {
+        let inst = instance(&["A"], &[("A", "a1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("BAD", ver("BAD", "x1", "1.19.2", &[])), // wrong MC only
+        ];
+        match run(&inst, &add1("BAD"), &[], &pv, Default::default()).await {
+            Err(EditError::Conflicts(v)) => {
+                assert!(!v.is_empty(), "blocked with a reported conflict");
+            }
+            Ok(r) => {
+                assert!(
+                    !r.entries.iter().any(|e| e.project_id == "BAD"),
+                    "an MC-incompatible add must never be silently included"
+                );
+                assert!(!r.added.contains(&"BAD".to_string()));
+            }
+            Err(other) => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    /// Regression guard for the `combined_issues` fix specifically. With an
+    /// EXPLICIT version_id the best-version pre-resolve is skipped, so the
+    /// incompatible mod is pinned as a root, lands in the resolved closure,
+    /// and is caught ONLY by the `validate_pack` half of `combined_issues`
+    /// (not the resolver's dep-issues, not the pre-resolve early-exit). If
+    /// the gate ever regresses to resolver-issues-only this fails.
+    #[tokio::test]
+    async fn explicit_incompatible_version_blocked_via_combined_issues() {
+        let inst = instance(&["A"], &[("A", "a1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("BAD", ver("BAD", "x1", "1.19.2", &[])), // wrong MC
+        ];
+        let add = vec![ModRef {
+            project_id: "BAD".into(),
+            version_id: "x1".into(), // EXPLICIT → pre-resolve is skipped
+        }];
+        match run(&inst, &add, &[], &pv, Default::default()).await {
+            Err(EditError::Conflicts(v)) => assert!(
+                v.iter().any(|i| matches!(
+                    i,
+                    pack::ValidationIssue::IncompatibleGameVersion { .. }
+                )),
+                "combined_issues must surface the per-entry \
+                 IncompatibleGameVersion, got {v:?}"
+            ),
+            Ok(r) => assert!(
+                !r.entries.iter().any(|e| e.project_id == "BAD"),
+                "an explicit MC-incompatible pin must never land silently"
+            ),
+            Err(other) => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    /// Swap in ONE call (atomic): remove B + add C → single resolve, both
+    /// reflected, roots = {A, C}.
+    #[tokio::test]
+    async fn swap_remove_and_add_in_one_call() {
+        let inst = instance(&["A", "B"], &[("A", "a1"), ("B", "b1")]);
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("B", ver("B", "b1", "1.20.1", &[])),
+            ("C", ver("C", "c1", "1.20.1", &[])),
+        ];
+        let r = run(&inst, &add1("C"), &["B".into()], &pv, Default::default())
+            .await
+            .expect("ok");
+        let pids: std::collections::HashSet<&str> =
+            r.entries.iter().map(|e| e.project_id.as_str()).collect();
+        assert!(pids.contains("A") && pids.contains("C"));
+        assert!(!pids.contains("B"));
+        assert!(r.added.contains(&"C".to_string()));
+        assert!(r.removed.contains(&"B".to_string()));
+        let roots: std::collections::HashSet<String> =
+            r.roots.into_iter().collect();
+        assert_eq!(
+            roots,
+            ["A".to_string(), "C".to_string()].into_iter().collect()
+        );
+    }
+
+    /// Explicit roots: removing a leaf root must NOT prune a transitive dep
+    /// another kept root still needs (A requires D; remove B; D survives, is
+    /// never a root, is not an orphan).
+    #[tokio::test]
+    async fn explicit_roots_keep_needed_transitive_dep() {
+        let inst = instance(
+            &["A", "B"],
+            &[("A", "a1"), ("B", "b1"), ("D", "d1")],
+        );
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &["D"])),
+            ("B", ver("B", "b1", "1.20.1", &[])),
+            ("D", ver("D", "d1", "1.20.1", &[])),
+        ];
+        let r = run(&inst, &[], &["B".into()], &pv, Default::default())
+            .await
+            .expect("ok");
+        let pids: std::collections::HashSet<&str> =
+            r.entries.iter().map(|e| e.project_id.as_str()).collect();
+        assert!(pids.contains("A") && pids.contains("D"));
+        assert!(!pids.contains("B"));
+        assert_eq!(r.roots, vec!["A".to_string()]);
+        assert!(
+            r.pruned_orphans.is_empty(),
+            "D still needed by A => not an orphan, got {:?}",
+            r.pruned_orphans
+        );
+        assert!(r.removed.contains(&"B".to_string()));
+    }
+
+    /// Blocker-1 regression: `apply_edit_writes` prunes the jar of a mod that
+    /// left the closure (the real launch path never would), invalidates the
+    /// stale grounding cache, rewrites the .mrpack, and returns the updated
+    /// instance — all under a tempdir (no ~/.anvil side effects).
+    #[test]
+    fn apply_edit_writes_prunes_stale_jar_and_invalidates_cache() {
+        let td = tempfile::tempdir().unwrap();
+        let dir = td.path();
+        std::fs::create_dir_all(dir.join("mods")).unwrap();
+        std::fs::write(dir.join("mods/keepme.jar"), b"x").unwrap();
+        std::fs::write(dir.join("mods/goneme.jar"), b"x").unwrap();
+        std::fs::write(dir.join("anvil-registry.json"), b"{}").unwrap();
+
+        let base = Instance {
+            id: "i".into(),
+            name: "P".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0".into(),
+            created: "x".into(),
+            last_played: None,
+            mods: vec![],
+            roots: vec![],
+        };
+        let kept = ModEntry {
+            project_id: "K".into(),
+            version_id: "k1".into(),
+            path: "mods/keepme.jar".into(),
+            sha1: "a".into(),
+            sha512: "b".into(),
+            downloads: vec!["https://cdn.modrinth.com/x.jar".into()],
+            file_size: 1,
+            game_versions: vec!["1.20.1".into()],
+            loaders: vec!["fabric".into()],
+            client_side: "required".into(),
+            server_side: "required".into(),
+        };
+        let res = EditResult {
+            entries: vec![kept],
+            roots: vec!["K".into()],
+            added: vec!["keepme".into()],
+            pulled_deps: vec![],
+            removed: vec!["goneme".into()],
+            pruned_orphans: vec![],
+            noop: false,
+        };
+        let updated = apply_edit_writes(dir, &base, &res).expect("writes ok");
+        assert!(dir.join("mods/keepme.jar").exists(), "kept jar survives");
+        assert!(
+            !dir.join("mods/goneme.jar").exists(),
+            "removed mod's jar pruned (Blocker 1)"
+        );
+        assert!(
+            !dir.join("anvil-registry.json").exists(),
+            "stale grounding cache invalidated"
+        );
+        assert!(dir.join("P.mrpack").exists(), ".mrpack rewritten");
+        assert_eq!(updated.mods.len(), 1);
+        assert_eq!(updated.mods[0].project_id, "K");
+        assert_eq!(updated.roots, vec!["K".to_string()]);
     }
 }

@@ -457,6 +457,17 @@ pub enum QuestIssue {
         task_tier: u8,
         max_allowed: u8,
     },
+    /// A task whose tier is BELOW its chapter's floor. Chapter 1 (idx 0)
+    /// onboards across T1+T2 (floor T1); every later chapter is T3+ (floor
+    /// T3) — a trivial T1/T2 task there breaks the rising curve. HARD, every
+    /// call, same as the over-cap check.
+    UnderdifficultForChapter {
+        quest: String,
+        chapter_index: usize,
+        task: String,
+        task_tier: u8,
+        min_allowed: u8,
+    },
 }
 
 /// Difficulty tier of a vanilla advancement: T1 (first ~10 min) .. T5
@@ -603,14 +614,45 @@ fn task_label(t: &QuestTask) -> String {
     }
 }
 
-/// Chapter difficulty ceiling: chapter index `idx` (0-based) of `n` caps at
-/// tier `min(idx+1, 5)`; the FINAL chapter is always allowed 5 (it is the
-/// designed climax). So Chapter I (idx 0) = T1 only, Chapter II = T2, ...
+/// Chapter difficulty FLOOR. Chapter 1 (idx 0) is the onboarding ramp and
+/// spans T1+T2 (floor T1). Every later chapter is T3+ (floor T3) so trivial
+/// early-game tasks never reappear once the pack is rolling. A single-chapter
+/// pack (n<=1) is the whole game, so it has no floor (T1).
+fn chapter_min_tier(idx: usize, n: usize) -> u8 {
+    if n <= 1 || idx == 0 {
+        1
+    } else {
+        3
+    }
+}
+
+/// Chapter difficulty CEILING. Chapter 1 caps at T2 (the merged T1+T2
+/// onboarding). Later chapters ramp gradually from T3 up to T5 by the final
+/// chapter, scaled to the chapter count so the curve fits any pack length:
+///
+/// | n | Ch1 | Ch2 | Ch3 | Ch4 | Ch5 | … | Last |
+/// |---|-----|-----|-----|-----|-----|---|------|
+/// | 2 | T1–2| T3–5|     |     |     |   |      |
+/// | 3 | T1–2| T3  | T3–5|     |     |   |      |
+/// | 5 | T1–2| T3  | T3–4| T3–4| T3–5|   |      |
+/// | 8 | T1–2| T3  | T3  | T3–4| T3–4| … | T3–5 |
+///
+/// Converges to T5 on the final chapter for every n >= 2. A single-chapter
+/// pack (n<=1) is unconstrained (it is the entire game).
 fn chapter_max_tier(idx: usize, n: usize) -> u8 {
-    if n > 0 && idx == n - 1 {
+    if n <= 1 {
         return 5;
     }
-    ((idx as u8).saturating_add(1)).min(5)
+    if idx == 0 {
+        return 2;
+    }
+    if idx == n - 1 {
+        return 5;
+    }
+    // idx in 1..n-1: interpolate the cap 3 -> 5 across the middle chapters.
+    let span = (n - 2).max(1) as f64;
+    let ramp = ((idx - 1) as f64 / span * 2.0).round() as i64;
+    (3 + ramp).clamp(3, 5) as u8
 }
 
 /// Phase-1B difficulty gate: every task whose tier exceeds its chapter's
@@ -622,6 +664,7 @@ fn check_difficulty(g: &QuestGraph) -> Vec<QuestIssue> {
     let mut out = Vec::new();
     for (ci, ch) in g.chapters.iter().enumerate() {
         let cap = chapter_max_tier(ci, n);
+        let floor = chapter_min_tier(ci, n);
         for q in &ch.quests {
             for t in &q.tasks {
                 let tier = task_tier(t);
@@ -632,6 +675,14 @@ fn check_difficulty(g: &QuestGraph) -> Vec<QuestIssue> {
                         task: task_label(t),
                         task_tier: tier,
                         max_allowed: cap,
+                    });
+                } else if tier < floor {
+                    out.push(QuestIssue::UnderdifficultForChapter {
+                        quest: q.id.clone(),
+                        chapter_index: ci,
+                        task: task_label(t),
+                        task_tier: tier,
+                        min_allowed: floor,
                     });
                 }
             }
@@ -1876,6 +1927,41 @@ fn layout_chapter(quests: &mut [QuestNode], gutter_pad: i64) {
     }
 }
 
+/// Replace em/en/horizontal-bar dashes in player-facing prose with a plain
+/// comma. The curator prompt already forbids em dashes; this is the
+/// belt-and-suspenders deterministic guarantee at the emit boundary so a
+/// model slip never reaches the questbook. Pure text transform: never drops
+/// information, never an LLM call, byte-stable. Applied to quest titles and
+/// every description line (the synthesized boss-summon block flows through
+/// the same description path, so it is covered too).
+///
+/// "the wizard — a recluse — guards" -> "the wizard, a recluse, guards"
+/// "good—bad"                        -> "good, bad"
+pub(crate) fn sanitize_player_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{2014}' || c == '\u{2013}' || c == '\u{2015}' {
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            while matches!(chars.peek(), Some(' ')) {
+                chars.next();
+            }
+            if out.is_empty() {
+                // Leading dash: emit nothing (trimmed away below anyway).
+            } else if out.ends_with([',', '.', '!', '?', ';', ':']) {
+                out.push(' ');
+            } else {
+                out.push_str(", ");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
+}
+
 /// Deterministic Heracles quest JSON. Returns (relative path, contents) pairs,
 /// e.g. ("config/heracles/quests/<hex>.json", "<json>"). One file per quest;
 /// the filename (sans `.json`) IS the quest id Heracles uses, and a quest's
@@ -2096,14 +2182,33 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                 rewards.insert(rhex, v);
             }
 
+            // A content/boss node gets the exact, deterministic summon ritual
+            // prepended, built from the SAME offering-block/trigger source the
+            // datapack emits, so the quest is never vague about how to start
+            // the fight (a hidden ritual, unlike a craftable recipe, must be
+            // stated in-game). It then flows through the shared em-dash
+            // sanitizer with the model's prose below.
+            let desc_src = match q.content.as_ref() {
+                Some(spec) => {
+                    let summon = crate::content::summon_instructions(
+                        &ch.id, &q.id, spec,
+                    );
+                    if q.description.trim().is_empty() {
+                        summon
+                    } else {
+                        format!("{summon}\n\n{}", q.description)
+                    }
+                }
+                None => q.description.clone(),
+            };
             // Multi-line descriptions become a string list (one per line);
             // empty stays an empty list so no blank line renders in-game.
-            let description: Vec<Value> = if q.description.trim().is_empty() {
+            let description: Vec<Value> = if desc_src.trim().is_empty() {
                 Vec::new()
             } else {
-                q.description
+                desc_src
                     .split('\n')
-                    .map(|l| Value::String(l.to_string()))
+                    .map(|l| Value::String(sanitize_player_text(l)))
                     .collect()
             };
 
@@ -2159,6 +2264,28 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
             // serialized name is the full "quest.heracles.<lower>" string)
             // reveals the whole chapter tree with locked quests greyed —
             // the All-the-Mods-style web the design intends.
+            // Quest icon: a recipe node shows its primary result item; a
+            // content/boss node shows the token it drops. Both are the
+            // tangible thing the quest is *for*, so the questbook entry is no
+            // longer a generic default icon. Plain quests keep no icon
+            // (Heracles falls back to its default). ItemStackCodec shape
+            // `{id,count}` mirrors the proven item-reward emit.
+            let mut display = Map::new();
+            display.insert(
+                "title".to_string(),
+                Value::String(sanitize_player_text(&q.title)),
+            );
+            display.insert("description".to_string(), Value::Array(description));
+            if let Some(icon_id) = primary_recipe_result(q).or_else(|| {
+                q.content.as_ref().map(crate::content::token_item_id)
+            }) {
+                display.insert(
+                    "icon".to_string(),
+                    json!({ "id": icon_id, "count": 1 }),
+                );
+            }
+            display.insert("groups".to_string(), Value::Object(groups));
+
             let quest = json!({
                 "dependencies": deps,
                 "tasks": Value::Object(tasks),
@@ -2166,11 +2293,7 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                 "settings": {
                     "hidden": "quest.heracles.dependencies_visible"
                 },
-                "display": {
-                    "title": q.title,
-                    "description": description,
-                    "groups": Value::Object(groups),
-                }
+                "display": Value::Object(display),
             });
 
             let mut s = serde_json::to_string_pretty(&quest)
@@ -2380,6 +2503,31 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_player_text_strips_all_dash_variants() {
+        // clause separators -> commas, reads fine
+        assert_eq!(
+            sanitize_player_text("the wizard \u{2014} a recluse \u{2014} guards"),
+            "the wizard, a recluse, guards"
+        );
+        // tight (no surrounding spaces)
+        assert_eq!(sanitize_player_text("good\u{2014}bad"), "good, bad");
+        // en dash + horizontal bar covered too
+        assert_eq!(sanitize_player_text("a \u{2013} b"), "a, b");
+        assert_eq!(sanitize_player_text("a\u{2015}b"), "a, b");
+        // no double punctuation when prose already ends in a comma/period
+        assert_eq!(sanitize_player_text("done, \u{2014} next"), "done, next");
+        assert_eq!(sanitize_player_text("Stop. \u{2014} Go"), "Stop. Go");
+        // leading dash collapses away; plain hyphen is untouched
+        assert_eq!(sanitize_player_text("\u{2014} opening"), "opening");
+        assert_eq!(sanitize_player_text("a - b (bullet)"), "a - b (bullet)");
+        // dash-free text is identity (no spurious mangling)
+        assert_eq!(
+            sanitize_player_text("Surround a diamond with andesite."),
+            "Surround a diamond with andesite."
+        );
+    }
+
+    #[test]
     fn concrete_grounding_rejects_fabricated_id_accepts_real() {
         let mut q = node("a", &[]);
         q.tasks = vec![
@@ -2522,6 +2670,7 @@ mod tests {
                 download_url: "u".to_string(),
                 file_size: 1,
             }],
+            roots: vec![],
         };
         // No jar on disk -> degrade: namespace-fallback mode, `cobblemon`
         // recorded as unscanned, NEVER an error.
@@ -3196,7 +3345,7 @@ mod tests {
                 QuestIssue::OverdifficultForChapter { quest, chapter_index, task, task_tier, max_allowed }
                 if quest == "q1_dungeons" && *chapter_index == 0
                     && task.contains("adventuring_time")
-                    && *task_tier == 5 && *max_allowed == 1
+                    && *task_tier == 5 && *max_allowed == 2
             )),
             "must flag q1_dungeons adventuring_time T5 in Chapter I; got {issues:#?}"
         );
@@ -3224,12 +3373,76 @@ mod tests {
             }),
             5
         );
-        // chapter ceiling: ch0=T1, ch1=T2, last forced T5
-        assert_eq!(chapter_max_tier(0, 6), 1);
-        assert_eq!(chapter_max_tier(1, 6), 2);
-        assert_eq!(chapter_max_tier(3, 6), 4); // non-last: min(idx+1,5)
-        assert_eq!(chapter_max_tier(5, 6), 5); // last forced 5
-        assert_eq!(chapter_max_tier(3, 4), 5); // idx 3 of 4 = last -> forced 5
+        // Chapter FLOOR: ch1 (idx0) onboards T1+; every later chapter is
+        // T3+; a degenerate 1-chapter pack has no floor.
+        assert_eq!(chapter_min_tier(0, 6), 1);
+        assert_eq!(chapter_min_tier(1, 6), 3);
+        assert_eq!(chapter_min_tier(5, 6), 3);
+        assert_eq!(chapter_min_tier(0, 1), 1);
+
+        // Chapter CEILING: ch1 = T2 (merged T1+T2 onboarding); later
+        // chapters ramp T3 -> T5, final always T5. The exact plan table
+        // for n = 2,3,5,8:
+        let caps =
+            |n: usize| (0..n).map(|i| chapter_max_tier(i, n)).collect::<Vec<_>>();
+        assert_eq!(caps(2), vec![2, 5]);
+        assert_eq!(caps(3), vec![2, 3, 5]);
+        assert_eq!(caps(5), vec![2, 3, 4, 4, 5]);
+        assert_eq!(caps(8), vec![2, 3, 3, 4, 4, 4, 5, 5]);
+        // Invariants for every pack length: ch1 caps at T2, the final
+        // chapter reaches T5 (the climax is always possible).
+        for n in 2..=20 {
+            assert_eq!(chapter_max_tier(0, n), 2, "ch1 caps at T2 (n={n})");
+            assert_eq!(
+                chapter_max_tier(n - 1, n),
+                5,
+                "final chapter reaches T5 (n={n})"
+            );
+        }
+        // Degenerate single-chapter pack is unconstrained (whole game).
+        assert_eq!(chapter_max_tier(0, 1), 5);
+    }
+
+    #[test]
+    fn difficulty_floor_rejects_trivial_task_after_chapter_one() {
+        // ch1 may freely mix T1 and T2 (the merge is the whole point);
+        // a later chapter with a T1 task is UnderdifficultForChapter.
+        let mut a = node("a", &[]);
+        a.tasks = vec![
+            QuestTask::Checkmark, // T1, fine in ch1
+            QuestTask::Advancement {
+                id: "minecraft:nether/netherite_armor".into(),
+            }, // T4 > ch1 cap 2 -> over
+        ];
+        let mut b = node("b", &[]);
+        b.tasks = vec![QuestTask::Checkmark]; // T1 in ch2 -> under floor
+        let g = QuestGraph {
+            title: "T".into(),
+            chapters: vec![
+                QuestChapter {
+                    id: "c1".into(),
+                    title: "One".into(),
+                    quests: vec![a],
+                },
+                QuestChapter {
+                    id: "c2".into(),
+                    title: "Two".into(),
+                    quests: vec![b],
+                },
+            ],
+        };
+        let issues = check_difficulty(&g);
+        // ch1's T4 task exceeds the merged T1+T2 cap (2).
+        assert!(issues.iter().any(|i| matches!(i,
+            QuestIssue::OverdifficultForChapter { chapter_index, max_allowed, .. }
+            if *chapter_index == 0 && *max_allowed == 2)));
+        // ch2's T1 task is below the T3 floor.
+        assert!(issues.iter().any(|i| matches!(i,
+            QuestIssue::UnderdifficultForChapter { quest, chapter_index, task_tier, min_allowed, .. }
+            if quest == "b" && *chapter_index == 1 && *task_tier == 1 && *min_allowed == 3)));
+        // A T1 task in ch1 must NOT be flagged as under (merge intent).
+        assert!(!issues.iter().any(|i| matches!(i,
+            QuestIssue::UnderdifficultForChapter { chapter_index, .. } if *chapter_index == 0)));
     }
 
     /// Gap #11: a retry re-emitting the same logical chapter under a NEW id
@@ -3810,6 +4023,36 @@ mod tests {
             token_name: Some("Void Heart".to_string()),
         });
         q
+    }
+
+    #[test]
+    fn heracles_quest_icon_is_recipe_result_or_boss_token() {
+        let body_of = |out: &[(String, String)], key: &str| -> serde_json::Value {
+            let hex = stable_hex(&format!("intro:{key}"));
+            let (_, b) = out
+                .iter()
+                .find(|(p, _)| {
+                    p == &format!("config/heracles/quests/{hex}.json")
+                })
+                .expect("quest file emitted");
+            serde_json::from_str(b).expect("quest json parses")
+        };
+
+        // Recipe node -> icon is the primary recipe's result item.
+        let r = body_of(&to_heracles_json(&graph_with(vec![recipe_node()])), "thermal_gate");
+        assert_eq!(r["display"]["icon"]["id"], "thermal:machine_frame");
+        assert_eq!(r["display"]["icon"]["count"], 1);
+
+        // Content/boss node -> icon is the token it drops.
+        let b = body_of(&to_heracles_json(&graph_with(vec![boss_node("climax")])), "climax");
+        assert_eq!(b["display"]["icon"]["id"], "minecraft:nether_star");
+
+        // Plain node -> no icon (Heracles falls back to its default).
+        let p = body_of(&to_heracles_json(&graph_with(vec![node("plain", &[])])), "plain");
+        assert!(
+            p["display"].get("icon").is_none(),
+            "a plain quest must not carry an icon"
+        );
     }
 
     #[test]

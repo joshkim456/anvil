@@ -9,6 +9,8 @@ mod auth;
 mod cache;
 mod chat;
 mod curator;
+mod icons;
+mod model3d;
 #[allow(dead_code)]
 mod instance;
 mod keybinds;
@@ -449,6 +451,10 @@ fn import_mrpack(path: String) -> Result<Instance, String> {
                 file_size: m.file_size,
             })
             .collect(),
+        // Imported packs are a frozen .mrpack snapshot with no Modrinth
+        // project ids; leave roots empty (the empty == "all mods are roots"
+        // back-compat rule applies and edit_pack is not offered for imports).
+        roots: vec![],
     };
     instance::save_instance(&inst).map_err(|e| e.to_string())?;
     Ok(inst)
@@ -586,6 +592,7 @@ fn create_instance(
         created: now.to_rfc3339(),
         last_played: None,
         mods: vec![],
+        roots: vec![],
     };
     instance::save_instance(&inst).map_err(|e| e.to_string())?;
     Ok(inst)
@@ -727,6 +734,21 @@ fn instance_namespaces(instance_id: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Recipe-grid item icon for the quest viewer. `Ok(None)` => the UI renders a
+/// labeled slot (unresolvable / vanilla-without-assets / not in any jar).
+/// Offloaded to a blocking thread: it may open several jars on a cache miss.
+#[tauri::command]
+async fn get_item_icon(
+    instance_id: String,
+    item_id: String,
+) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        icons::item_icon_data_url(&instance_id, &item_id)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -873,6 +895,7 @@ pub fn run() {
             set_keybinds,
             get_quest_graph,
             save_quest_graph,
+            get_item_icon,
             validate_quest_graph
         ])
         .run(tauri::generate_context!())

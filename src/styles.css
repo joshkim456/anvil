@@ -2363,6 +2363,107 @@ a {
   word-break: break-word;
 }
 
+/* ---- Recipe crafting grid (deterministic, real item icons) ---- */
+
+.recipe-block {
+  margin-bottom: 14px;
+}
+
+.recipe-craft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.recipe-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 42px);
+  grid-template-rows: repeat(3, 42px);
+  gap: 3px;
+  padding: 5px;
+  background: var(--paper-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+
+.recipe-slot {
+  position: relative;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--slot);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 2px rgba(54, 48, 42, 0.06);
+  overflow: hidden;
+}
+
+.recipe-slot.empty {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Static icon: fill the slot, never distort. object-fit handles non-square
+   textures gracefully; pixelated keeps 16px art crisp at any size. */
+.recipe-slot-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  display: block;
+}
+
+/* Animated texture: Minecraft stores these as a tall vertical film-strip
+   (16 x 16N). Render it as a stepped sprite animation — one frame at a time,
+   no squish. `frames`/`duration` are set inline once dimensions are known. */
+.recipe-slot-img.anim {
+  width: 100%;
+  height: 100%;
+  background-repeat: no-repeat;
+  background-size: 100% auto;
+  background-position-x: center;
+  image-rendering: pixelated;
+  animation-name: recipe-strip;
+  animation-iteration-count: infinite;
+}
+
+@keyframes recipe-strip {
+  from {
+    background-position-y: 0%;
+  }
+  to {
+    background-position-y: 100%;
+  }
+}
+
+.recipe-slot-label {
+  font-size: 8.5px;
+  line-height: 1.05;
+  text-align: center;
+  color: var(--muted);
+  padding: 2px;
+  word-break: break-word;
+  text-transform: capitalize;
+}
+
+.recipe-arrow {
+  font-family: var(--display);
+  font-size: 20px;
+  color: var(--accent);
+  flex: none;
+}
+
+.recipe-craft .recipe-slot:last-child {
+  width: 50px;
+  height: 50px;
+  border-color: var(--accent-edge);
+  background: var(--accent-tint);
+}
+
 /* ---- Rendered Markdown (mod descriptions) ---- */
 
 .body-text.md > *:first-child {

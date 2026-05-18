@@ -287,6 +287,180 @@ function recipeResult(r: Record<string, unknown>): string {
   return "?";
 }
 
+/** The raw (un-prettified) result item id of a recipe, for icon lookup. */
+function rawResultId(r: Record<string, unknown>): string {
+  const res = r.result;
+  if (typeof res === "string") return res;
+  if (res && typeof res === "object") {
+    const item = (res as Record<string, unknown>).item;
+    if (typeof item === "string") return item;
+  }
+  return "";
+}
+
+type Ing = { item?: string; tag?: string };
+
+// Module-level cache so the same item id is fetched once across every slot,
+// recipe, and drawer open (the Rust side also disk-caches; this avoids even
+// the round-trip). Value: data URL, or null = unresolvable (labeled slot).
+const iconCache = new Map<string, string | null>();
+
+/** `undefined` = loading, `null` = show a labeled slot, string = data URL. */
+function useItemIcon(
+  instanceId: string,
+  itemId: string | null,
+): string | null | undefined {
+  const key = `${instanceId}|${itemId}`;
+  const [val, setVal] = useState<string | null | undefined>(
+    itemId == null
+      ? null
+      : iconCache.has(key)
+        ? iconCache.get(key)
+        : undefined,
+  );
+  useEffect(() => {
+    if (itemId == null) {
+      setVal(null);
+      return;
+    }
+    if (iconCache.has(key)) {
+      setVal(iconCache.get(key));
+      return;
+    }
+    let alive = true;
+    api
+      .getItemIcon(instanceId, itemId)
+      .then((u) => {
+        iconCache.set(key, u ?? null);
+        if (alive) setVal(u ?? null);
+      })
+      .catch(() => {
+        iconCache.set(key, null);
+        if (alive) setVal(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [key, instanceId, itemId]);
+  return val;
+}
+
+/** Renders a resolved icon. Minecraft animated textures are a tall vertical
+ *  film-strip (square frames stacked); we measure the data URL and, if it is
+ *  a strip, play it as a stepped sprite animation instead of squishing every
+ *  frame into one slot. Static textures render as a plain fitted image. */
+function SlotImg({ url, alt }: { url: string; alt: string }) {
+  const [frames, setFrames] = useState(1);
+  useEffect(() => {
+    let alive = true;
+    const im = new Image();
+    im.onload = () => {
+      if (!alive) return;
+      const w = im.naturalWidth;
+      const h = im.naturalHeight;
+      // A vertical strip of >=2 square frames => animated.
+      setFrames(w > 0 && h > w && h % w === 0 ? h / w : 1);
+    };
+    im.src = url;
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+
+  if (frames > 1) {
+    return (
+      <span
+        className="recipe-slot-img anim"
+        role="img"
+        aria-label={alt}
+        style={{
+          backgroundImage: `url("${url}")`,
+          animationDuration: `${Math.max(0.6, frames * 0.12)}s`,
+          animationTimingFunction: `steps(${frames})`,
+        }}
+      />
+    );
+  }
+  return <img className="recipe-slot-img" src={url} alt={alt} />;
+}
+
+/** One crafting slot: a real item icon, or a labeled fallback (a tag, a
+ *  vanilla item without downloaded assets, or a geometry-only/builtin 3D
+ *  model with no flat sprite). Reuses `prettyId` for the label — no third
+ *  prettifier. */
+function RecipeSlot({
+  instanceId,
+  ing,
+}: {
+  instanceId: string;
+  ing: Ing | null;
+}) {
+  const isTag = !!ing?.tag;
+  const itemId = ing?.item ?? null;
+  const icon = useItemIcon(instanceId, isTag ? null : itemId);
+  if (!ing) return <div className="recipe-slot empty" />;
+  const full = ing.tag ? `Tag: ${ing.tag}` : prettyId(itemId ?? "");
+  const short = ing.tag
+    ? `#${ing.tag.split(/[:/]/).pop() ?? ing.tag}`
+    : (itemId ?? "").split(":").pop()?.replace(/_/g, " ") ?? "";
+  return (
+    <div className="recipe-slot" title={full}>
+      {icon ? (
+        <SlotImg url={icon} alt={full} />
+      ) : (
+        <span className="recipe-slot-label">{short}</span>
+      )}
+    </div>
+  );
+}
+
+/** Deterministic 3x3 crafting grid, rendered from the real RecipeDef (never
+ *  the model's prose). Shaped uses pattern+key; shapeless fills in order;
+ *  smelting is input then result. */
+function CraftingGrid({
+  instanceId,
+  recipe,
+}: {
+  instanceId: string;
+  recipe: Record<string, unknown>;
+}) {
+  const type = String(recipe.type ?? "recipe");
+  const cells: (Ing | null)[] = Array(9).fill(null);
+  if (type === "shaped") {
+    const pattern = (recipe.pattern as string[] | undefined) ?? [];
+    const key = (recipe.key as Record<string, Ing> | undefined) ?? {};
+    for (let r = 0; r < Math.min(3, pattern.length); r++) {
+      const rowStr = pattern[r] ?? "";
+      for (let c = 0; c < Math.min(3, rowStr.length); c++) {
+        const ch = rowStr[c];
+        if (ch && ch !== " ") cells[r * 3 + c] = key[ch] ?? null;
+      }
+    }
+  } else if (type === "shapeless") {
+    const ings = (recipe.ingredients as Ing[] | undefined) ?? [];
+    ings.slice(0, 9).forEach((g, i) => (cells[i] = g));
+  } else if (type === "smelting") {
+    cells[0] = (recipe.ingredient as Ing | undefined) ?? null;
+  }
+  const result = rawResultId(recipe);
+  return (
+    <div className="recipe-craft">
+      <div className="recipe-grid" aria-label={`${type} recipe`}>
+        {cells.map((g, i) => (
+          <RecipeSlot key={i} instanceId={instanceId} ing={g} />
+        ))}
+      </div>
+      <span className="recipe-arrow" aria-hidden>
+        →
+      </span>
+      <RecipeSlot
+        instanceId={instanceId}
+        ing={result ? { item: result } : null}
+      />
+    </div>
+  );
+}
+
 /** Tasks/rewards are loosely-typed bags from the quest IR. Turn each known
  *  variant into a plain-English chip + line; unknown shapes fall back to a
  *  readable key/value dump so future variants never render as nothing. */
@@ -365,12 +539,14 @@ function QuestDrawer({
   quest,
   chapter,
   questTitles,
+  instanceId,
   onClose,
 }: {
   open: boolean;
   quest: Quest | null;
   chapter: string;
   questTitles: Record<string, string>;
+  instanceId: string;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -475,13 +651,16 @@ function QuestDrawer({
                   const row = r as Record<string, unknown>;
                   const kind = String(row.type ?? "recipe");
                   return (
-                    <div className="quest-drawer-row" key={i}>
-                      <span className="quest-drawer-row-type">
-                        {titleCase(kind)}
-                      </span>
-                      <span className="quest-drawer-row-detail">
-                        Bridges to {recipeResult(row)}
-                      </span>
+                    <div className="recipe-block" key={i}>
+                      <div className="quest-drawer-row">
+                        <span className="quest-drawer-row-type">
+                          {titleCase(kind)}
+                        </span>
+                        <span className="quest-drawer-row-detail">
+                          Bridges to {recipeResult(row)}
+                        </span>
+                      </div>
+                      <CraftingGrid instanceId={instanceId} recipe={row} />
                     </div>
                   );
                 })}
@@ -638,6 +817,7 @@ export default function Quests() {
         quest={sel?.quest ?? null}
         chapter={sel?.chapter ?? ""}
         questTitles={questTitles}
+        instanceId={pick}
         onClose={() => setSel(null)}
       />
     </>

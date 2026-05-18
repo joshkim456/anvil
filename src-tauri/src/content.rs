@@ -309,12 +309,80 @@ pub fn facet_authored_ids(chapter_id: &str, node_id: &str, spec: &ContentSpec) -
 /// `anvil_token` NBT — NEVER a `Checkmark`, never a `kill_entity` on a
 /// fabricated id. Synthesized at emit time, mirroring the recipe facet's
 /// auto item-on-result task. `None` for a kind that has no token (none in v1).
+/// The effective token item id a boss drops (the single source of the
+/// `minecraft:nether_star` default). Used by the surfaced task AND by the
+/// Heracles quest icon so they never disagree.
+pub fn token_item_id(spec: &ContentSpec) -> String {
+    let ContentSpec::Boss { token_item, .. } = spec;
+    token_item
+        .clone()
+        .unwrap_or_else(|| "minecraft:nether_star".to_string())
+}
+
+/// The token's in-game display name (single source of the
+/// `"<display_name> Token"` default).
+pub fn token_display_name(spec: &ContentSpec) -> String {
+    let ContentSpec::Boss {
+        display_name,
+        token_name,
+        ..
+    } = spec;
+    token_name
+        .clone()
+        .unwrap_or_else(|| format!("{display_name} Token"))
+}
+
+/// `minecraft:gold_block` -> `Gold Block`. Deterministic; for player prose.
+fn pretty_id(id: &str) -> String {
+    let bare = id.rsplit(':').next().unwrap_or(id);
+    bare.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut ch = w.chars();
+            match ch.next() {
+                Some(f) => f.to_uppercase().chain(ch).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The exact, deterministic in-game summon ritual, built from the SAME
+/// offering-block / trigger source `to_openloader_files` emits (`altar_block`,
+/// `content_hex`, the `anvil_summon_<hex>` objective), so the quest text and
+/// the datapack can never disagree. Prepended to the content node's Heracles
+/// description; it then flows through the shared em-dash sanitizer with the
+/// rest of the description. Boss summoning is a hidden ritual the player
+/// cannot otherwise discover, so unlike a craftable recipe it MUST be stated
+/// in-game.
+pub fn summon_instructions(chapter_id: &str, node_id: &str, spec: &ContentSpec) -> String {
+    let hex = content_hex(chapter_id, node_id);
+    let ContentSpec::Boss {
+        display_name,
+        trigger,
+        ..
+    } = spec;
+    let tname = token_display_name(spec);
+    let how = match trigger {
+        Trigger::Totem => format!(
+            "To summon {display_name}: drop a Nether Star and a {} within 3 \
+             blocks of each other.",
+            pretty_id(altar_block(&hex))
+        ),
+        Trigger::Command => format!(
+            "To summon {display_name}: run the command \
+             /trigger anvil_summon_{hex}."
+        ),
+        // Region is reserved (never emitted in v1); stay defensive.
+        Trigger::Region => format!("Seek out and defeat {display_name}."),
+    };
+    format!("{how} Defeat {display_name} to claim the {tname}.")
+}
+
 pub fn surfaced_task(chapter_id: &str, node_id: &str, spec: &ContentSpec) -> crate::quest::QuestTask {
     let hex = content_hex(chapter_id, node_id);
-    let ContentSpec::Boss { token_item, .. } = spec;
-    let item = token_item
-        .clone()
-        .unwrap_or_else(|| "minecraft:nether_star".to_string());
+    let item = token_item_id(spec);
     crate::quest::QuestTask::GatherItem {
         item,
         // Partial-compound predicate: matches the give-stack's superset
@@ -879,6 +947,53 @@ mod tests {
                 quests: vec![q],
             }],
         }
+    }
+
+    #[test]
+    fn summon_instructions_match_the_datapack_offering_and_trigger() {
+        // Totem: the prose names the SAME deterministic offering block the
+        // altar scanner keys on (single source: altar_block(content_hex)).
+        let q = boss_node("climax");
+        let spec = q.content.as_ref().unwrap();
+        let hex = content_hex("ch8", "climax");
+        let si = summon_instructions("ch8", "climax", spec);
+        assert!(
+            si.contains(&pretty_id(altar_block(&hex))),
+            "summon prose must name the offering block: {si}"
+        );
+        assert!(si.contains("Nether Star"));
+        assert!(si.contains("within 3 blocks"));
+        assert!(si.contains(
+            "Defeat Eternax, the Void Sovereign to claim the Void Heart."
+        ));
+        assert!(!si.contains('\u{2014}'), "no em dash in synthesized text");
+
+        // Cross-artifact: the block in the prose is exactly the one
+        // to_openloader_files writes into the altar scanner function.
+        let files = to_openloader_files(&graph_with(boss_node("climax")), "1.20.1");
+        let altar = files
+            .iter()
+            .find(|(p, _)| {
+                p == &format!("{ROOT}/data/anvil/functions/{hex}_altar.mcfunction")
+            })
+            .expect("altar scanner emitted");
+        assert!(
+            altar.1.contains(altar_block(&hex)),
+            "datapack altar must use the same offering block as the prose"
+        );
+
+        // Command trigger: the prose names the exact /trigger objective.
+        let mut q2 = boss_node("c2");
+        if let Some(ContentSpec::Boss { trigger, .. }) = q2.content.as_mut() {
+            *trigger = Trigger::Command;
+        }
+        let spec2 = q2.content.as_ref().unwrap();
+        let hex2 = content_hex("ch8", "c2");
+        let si2 = summon_instructions("ch8", "c2", spec2);
+        assert!(
+            si2.contains(&format!("/trigger anvil_summon_{hex2}")),
+            "command prose must name the trigger objective: {si2}"
+        );
     }
 
     #[test]
