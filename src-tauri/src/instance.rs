@@ -19,6 +19,18 @@ pub struct PinnedMod {
     pub sha512: String,
     pub download_url: String,
     pub file_size: u64,
+    /// Modrinth env support, carried so an edit preserves the original
+    /// `.mrpack` `env` instead of flattening every mod to required/required
+    /// (which would break client-only mods on launcher/server import). Default
+    /// for pre-existing instances that lack the field is the Modrinth norm.
+    #[serde(default = "default_side")]
+    pub client_side: String,
+    #[serde(default = "default_side")]
+    pub server_side: String,
+}
+
+fn default_side() -> String {
+    "required".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

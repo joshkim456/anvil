@@ -750,22 +750,6 @@ pub fn load_account() -> Option<MinecraftAccount> {
     serde_json::from_str(&s).ok()
 }
 
-/// A throwaway offline identity for the smoke test. Minecraft mod
-/// INITIALIZATION (Fabric entrypoints — the failure classes Tier 3 catches)
-/// runs before any online auth check; `build_command_args` only string-
-/// substitutes these fields. So verify-during-build never needs a real MS
-/// sign-in. Never use this to actually play (no valid session).
-pub fn offline_account() -> MinecraftAccount {
-    MinecraftAccount {
-        username: "AnvilSmoke".to_string(),
-        // Valid offline-style UUIDv3-shaped string; only its format matters.
-        uuid: "00000000-0000-0000-0000-000000000000".to_string(),
-        minecraft_token: "0".to_string(),
-        ms_refresh_token: String::new(),
-        expires_at: 0,
-    }
-}
-
 pub fn save_account(a: &MinecraftAccount) -> std::io::Result<()> {
     let dir = crate::settings::data_dir();
     std::fs::create_dir_all(&dir)?;

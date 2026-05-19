@@ -1082,6 +1082,46 @@ mod tests {
     }
 
     #[test]
+    fn harvest_lang_never_pollutes_id_buckets_with_nested_keys() {
+        // The exact real-world shape that shipped the Stardew Hollow crash:
+        // `comforts` has color-variant items + a nested tooltip lang key.
+        let body = r#"{
+            "item.comforts.white_sleeping_bag": "White Sleeping Bag",
+            "item.comforts.sleeping_bag.auto_use.tooltip": "Sneak to skip",
+            "block.comforts.rope": "Rope",
+            "block.comforts.rope.placement.tooltip": "Place on a block",
+            "entity.comforts.cat.subtitle": "Cat purrs"
+        }"#;
+        let mut v = RegistryVocab::default();
+        harvest_lang("comforts", body, &mut v);
+
+        // Flat ids are harvested as before.
+        assert!(v.items.contains("comforts:white_sleeping_bag"));
+        assert!(v.blocks.contains("comforts:rope"));
+        // Nested lang sub-keys NEVER enter an id bucket (the bug).
+        assert!(
+            !v.items.contains("comforts:sleeping_bag.auto_use.tooltip"),
+            "tooltip lang key must not masquerade as an item id"
+        );
+        assert!(!v.blocks.contains("comforts:rope.placement.tooltip"));
+        assert!(!v.entities.contains("comforts:cat.subtitle"));
+        // No item id called `comforts:sleeping_bag` exists at all (only the
+        // color variants do) — the polluted entry must be gone entirely.
+        assert!(!v
+            .items
+            .iter()
+            .any(|i| i.starts_with("comforts:sleeping_bag.")));
+        // Labels for nested keys are dropped too (the flat id keeps its own).
+        assert_eq!(
+            v.labels.get("comforts:white_sleeping_bag").map(String::as_str),
+            Some("White Sleeping Bag")
+        );
+        assert!(!v
+            .labels
+            .contains_key("comforts:sleeping_bag.auto_use.tooltip"));
+    }
+
+    #[test]
     fn scan_handles_1_21_singular_folders() {
         let dir = tempfile::tempdir().unwrap();
         let jar = dir.path().join("m.jar");

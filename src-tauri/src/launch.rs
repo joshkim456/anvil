@@ -249,14 +249,203 @@ pub fn classify_smoke_line(line: &str) -> SmokeSignal {
             reason: "The game crashed during startup".into(),
         };
     }
-    // ---- success: mods are fully initialized by the time any of these print
-    if line.contains("Setting user:")
-        || line.contains("Sound engine started")
+    // ---- success: a genuinely POST-entrypoint milestone ONLY.
+    // `Setting user:` is logged inside class_310.<init> BEFORE Fabric invokes
+    // the `main` mod entrypoints (Hooks.startClient), so treating it as success
+    // false-passed every mod that throws in onInitialize — e.g. sprout, whose
+    // crash report timestamps ~55s AFTER `Setting user:` (smoke_test returned
+    // Ok and killed the JVM long before the crash ever printed). Sound-engine
+    // init runs later in the same constructor, after all main/client
+    // entrypoints, so it is a safe "the pack actually initialized" signal.
+    if line.contains("Sound engine started")
         || line.contains("OpenAL initialized")
     {
         return SmokeSignal::Success;
     }
     SmokeSignal::None
+}
+
+/// True for the Fabric mod-RESOLUTION reject class (the loader refuses to
+/// start because deps can't be satisfied) as opposed to a runtime / world-gen
+/// crash. The resolution reject is followed by a structured remediation block
+/// we want to parse, so the dump driver defers its return for this class only.
+pub fn is_resolution_reject(reason: &str) -> bool {
+    reason.contains("incompatible / missing mods")
+        || (reason.contains("requires") && reason.contains("which is missing"))
+}
+
+/// One independent root-cause fix distilled from the Fabric remediation block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FabricAction {
+    pub dep_id: String,
+    pub dep_name: String,
+    /// Version floor as a constraint string, e.g. `>=0.92.2+1.20.1`.
+    pub want: String,
+    /// The dep is absent entirely (add it) vs present-but-wrong (repin it).
+    pub add_missing: bool,
+    /// Consumer mod ids blocked by this one dependency.
+    pub holders: Vec<String>,
+}
+
+/// Root-caused remediation parsed from the Fabric loader's own
+/// `Incompatible mods found! / A potential solution / More details` block.
+///
+/// Fabric prints a PER-CONSUMER `Replace mod X` suggestion list that, followed
+/// literally, makes the curator thrash (downgrade three consumers one by one)
+/// and can land a needlessly degraded pack. The truth is in the
+/// `… requires version >=V of mod 'Dep' …` detail lines: aggregating those by
+/// dependency collapses N consumer-replacements into the ONE root-cause repin
+/// (e.g. "bump fabric-api", which dissolves antique_atlas + surveyor + yacl).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FabricRemediation {
+    /// Dependency behind the most blocked consumers — for
+    /// `DumpOutcome::Crashed.mod_name`.
+    pub primary_dep_id: Option<String>,
+    pub actions: Vec<FabricAction>,
+    /// The full curator-facing message.
+    pub summary: String,
+}
+
+/// Pick the higher of two version-floor strings using the real Fabric engine;
+/// fall back to "keep `a`" if either is unparseable (never lose a constraint).
+fn higher_floor(a: &str, b: &str) -> String {
+    match (
+        crate::version::Version::parse(a),
+        crate::version::Version::parse(b),
+    ) {
+        (Some(va), Some(vb)) => {
+            if vb > va {
+                b.to_string()
+            } else {
+                a.to_string()
+            }
+        }
+        _ => a.to_string(),
+    }
+}
+
+/// Parse one `Mod 'Holder' (hid) hv requires version V or later of mod
+/// 'Dep' (depid), <tail>` detail line into
+/// `(holder_id, dep_id, dep_name, want, add_missing)`.
+fn parse_requires_line(
+    line: &str,
+) -> Option<(String, String, String, String, bool)> {
+    let r = line.find(" requires version ")?;
+    let head = &line[..r];
+    if !head.contains("Mod '") {
+        return None;
+    }
+    // holder id = last "(...)" group before "requires"
+    let ho = head.rfind('(')?;
+    let hc = head[ho..].find(')')? + ho;
+    let holder_id = head[ho + 1..hc].trim().to_string();
+    if holder_id.is_empty() {
+        return None;
+    }
+    let after = &line[r + " requires version ".len()..];
+    let want_raw = between(after, "", " or later")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let depseg = after.split(" of mod '").nth(1)?;
+    let (dep_name, rest) = depseg.split_once('\'')?;
+    let do_ = rest.find('(')?;
+    let dc = rest[do_..].find(')')? + do_;
+    let dep_id = rest[do_ + 1..dc].trim().to_string();
+    if dep_id.is_empty() {
+        return None;
+    }
+    let add_missing = line.contains("which is missing");
+    Some((
+        holder_id,
+        dep_id,
+        dep_name.trim().to_string(),
+        format!(">={}", want_raw),
+        add_missing,
+    ))
+}
+
+pub fn parse_fabric_remediation(log: &str) -> Option<FabricRemediation> {
+    use std::collections::BTreeMap;
+    // dep_id -> (dep_name, want_floor, add_missing, holders)
+    let mut by_dep: BTreeMap<String, (String, String, bool, Vec<String>)> =
+        BTreeMap::new();
+    for line in log.lines() {
+        if !line.contains(" requires version ") || !line.contains(" of mod '")
+        {
+            continue;
+        }
+        let Some((holder, dep_id, dep_name, want, missing)) =
+            parse_requires_line(line)
+        else {
+            continue;
+        };
+        let e = by_dep.entry(dep_id).or_insert_with(|| {
+            (dep_name.clone(), want.clone(), missing, Vec::new())
+        });
+        e.1 = {
+            // higher_floor works on bare versions; strip the ">=" we added.
+            let cur = e.1.trim_start_matches(">=");
+            let new = want.trim_start_matches(">=");
+            format!(">={}", higher_floor(cur, new))
+        };
+        e.2 = e.2 || missing;
+        if !e.3.contains(&holder) {
+            e.3.push(holder);
+        }
+    }
+    if by_dep.is_empty() {
+        return None;
+    }
+    let mut actions: Vec<FabricAction> = by_dep
+        .into_iter()
+        .map(|(dep_id, (dep_name, want, add_missing, mut holders))| {
+            holders.sort();
+            FabricAction {
+                dep_id,
+                dep_name,
+                want,
+                add_missing,
+                holders,
+            }
+        })
+        .collect();
+    // Most-blocked dependency first — that's the root-cause repin.
+    actions.sort_by(|a, b| {
+        b.holders
+            .len()
+            .cmp(&a.holders.len())
+            .then(a.dep_id.cmp(&b.dep_id))
+    });
+    let primary_dep_id = actions.first().map(|a| a.dep_id.clone());
+
+    let mut summary = String::from(
+        "Mod resolution failed — this pack does NOT boot. Fabric's own \
+         per-mod \"Replace\" hints are misleading (they tell you to downgrade \
+         the dependent mods); the real fix is the dependency repin(s) below. \
+         Apply ALL of these in place with edit_pack on this instance, do NOT \
+         downgrade the dependent mods, and treat removing a mod as a LAST \
+         resort only if a repin/add cannot resolve it:\n",
+    );
+    for (i, a) in actions.iter().enumerate() {
+        let verb = if a.add_missing {
+            format!("add dependency '{}'", a.dep_id)
+        } else {
+            format!("repin '{}'", a.dep_id)
+        };
+        summary.push_str(&format!(
+            "  {}. {} to {}  ({} — required by: {})\n",
+            i + 1,
+            verb,
+            a.want,
+            a.dep_name,
+            a.holders.join(", "),
+        ));
+    }
+    Some(FabricRemediation {
+        primary_dep_id,
+        actions,
+        summary,
+    })
 }
 
 /// The verdict surfaced to the UI/curator.
@@ -507,6 +696,8 @@ async fn resolve_helper_jar(
         sha512: f.hashes.sha512.clone(),
         download_url: f.url.clone(),
         file_size: f.size,
+        client_side: "required".to_string(),
+        server_side: "required".to_string(),
     };
     ensure_mod(client, &pinned, dest).await
 }
@@ -625,7 +816,25 @@ async fn drive_dump_server(
     let outcome = {
         let drive = async {
             let mut requested_stop = false;
+            // Buffer the boot log so the Fabric mod-resolution remediation
+            // block (`A potential solution / More details`, which prints AFTER
+            // the first failure line, then the JVM exits) can be parsed whole.
+            // Bounded: a resolution reject is tiny; a big successful/world-gen
+            // log just stops accumulating (we never parse those).
+            let mut log_buf = String::new();
+            let mut resolution_fail = false;
             while let Some(line) = lrx.recv().await {
+                if log_buf.len() < 512_000 {
+                    log_buf.push_str(&line);
+                    log_buf.push('\n');
+                }
+                // Once we know it's a resolution reject, just keep draining
+                // (the JVM dies in a beat) so we can parse the full block on
+                // stream end — do not re-classify per-line.
+                if resolution_fail {
+                    let _ = tx.send(LaunchEvent::Log(line));
+                    continue;
+                }
                 // A failure class we already classify (incompatible mods,
                 // entrypoint crash, crash report, a fatal NoClassDefFound on
                 // entity-load during spawn prep — the world-creation crash
@@ -635,6 +844,19 @@ async fn drive_dump_server(
                 if let SmokeSignal::Failure { mod_name, reason } =
                     classify_smoke_line(&line)
                 {
+                    // The mod-resolution reject prints its structured fix
+                    // block next — defer; every other fatal class (world-gen
+                    // crash, crash report) returns now (analyze_crash owns it).
+                    if is_resolution_reject(&reason) {
+                        resolution_fail = true;
+                        let _ = tx.send(LaunchEvent::Status(
+                            "Pack failed mod resolution — reading Fabric's \
+                             remediation"
+                                .into(),
+                        ));
+                        let _ = tx.send(LaunchEvent::Log(line));
+                        continue;
+                    }
                     let _ = tx.send(LaunchEvent::Status(format!(
                         "Registry dump aborted: {reason}"
                     )));
@@ -660,7 +882,26 @@ async fn drive_dump_server(
                     stdin = None;
                 }
             }
-            // Stream ended. A clean `stop` after a dump leaves `dump/` behind;
+            // Stream ended. A deferred mod-resolution reject: parse the whole
+            // remediation block into the root-cause repin set the curator can
+            // act on directly (instead of the generic "incompatible mods").
+            if resolution_fail {
+                return match parse_fabric_remediation(&log_buf) {
+                    Some(rem) => DumpOutcome::Crashed {
+                        mod_name: rem.primary_dep_id.clone(),
+                        reason: rem.summary,
+                    },
+                    None => DumpOutcome::Crashed {
+                        mod_name: None,
+                        reason: "Pack failed mod resolution (Fabric rejected \
+                                 incompatible / missing mods); the remediation \
+                                 block could not be parsed — inspect the boot \
+                                 log and repair with edit_pack."
+                            .into(),
+                    },
+                };
+            }
+            // A clean `stop` after a dump leaves `dump/` behind;
             // its presence is the success signal (a crash never writes it).
             if requested_stop && dump_dir_buf.join("dump").is_dir() {
                 DumpOutcome::Dumped(dump_dir_buf.clone())
@@ -2442,7 +2683,7 @@ mod tests {
 
 #[cfg(test)]
 mod smoke_tests {
-    use super::{classify_smoke_line, SmokeSignal};
+    use super::{classify_smoke_line, parse_fabric_remediation, SmokeSignal};
 
     #[test]
     fn detects_the_exact_failures_seen_this_session() {
@@ -2491,16 +2732,109 @@ mod smoke_tests {
         ));
     }
 
+    /// The world-CREATION crash class the new world-gen gate exists to catch,
+    /// using the EXACT lines from the real Stardew Hollow server crash
+    /// (`crash-2026-05-18_20.37.58-server.txt` + its preceding WARNs). The
+    /// gate's `drive_dump_server` scan maps any `Failure` here to
+    /// `DumpOutcome::Crashed`; the benign probes must stay `None` or every
+    /// pack with an optional cross-mod integration would false-positive.
     #[test]
-    fn recognizes_the_mods_initialized_milestone() {
+    fn villagernames_world_creation_crash_is_detected_not_the_benign_probes() {
+        // BENIGN — ubiquitous optional-integration probes Fabric logs at
+        // mod-load. These fire for villagernames+guardvillagers too and must
+        // NOT abort the verification boot.
+        assert_eq!(
+            classify_smoke_line(
+                "[20:36:45] [main/WARN]: Error loading class: \
+                 dev/mrsterner/guardvillagers/common/entity/GuardEntity \
+                 (java.lang.ClassNotFoundException: \
+                 dev/mrsterner/guardvillagers/common/entity/GuardEntity)"
+            ),
+            SmokeSignal::None,
+            "an `Error loading class` WARN is an optional-compat probe"
+        );
+        assert_eq!(
+            classify_smoke_line(
+                "[20:36:45] [main/WARN]: @Mixin target \
+                 dev.mrsterner.guardvillagers.common.entity.GuardEntity was \
+                 not found villagernames.mixins.json:guard.GuardEntityMixin \
+                 from mod villagernames"
+            ),
+            SmokeSignal::None,
+            "an unresolved @Mixin target WARN is not a crash"
+        );
+
+        // FATAL — the actual world-tick crash (verbatim from the crash
+        // report). Each MUST be a Failure so the gate returns Crashed and
+        // BLOCKS quest generation instead of shipping a world-killing pack.
+        for fatal in [
+            "---- Minecraft Crash Report ----",
+            "java.lang.NoClassDefFoundError: \
+             dev/mrsterner/guardvillagers/common/entity/GuardEntity",
+            "Caused by: java.lang.ClassNotFoundException: \
+             dev.mrsterner.guardvillagers.common.entity.GuardEntity",
+        ] {
+            assert!(
+                matches!(
+                    classify_smoke_line(fatal),
+                    SmokeSignal::Failure { .. }
+                ),
+                "must classify as Failure: {fatal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mods_initialized_milestone_is_post_entrypoint_only() {
+        // `Setting user:` is PRE-entrypoint — it must NOT short-circuit to
+        // success. Doing so false-passed sprout's onInitialize crash, which
+        // the crash report timestamps ~55s LATER. It is inert now.
         assert_eq!(
             classify_smoke_line("[Render thread/INFO]: Setting user: Kimcheee"),
-            SmokeSignal::Success
+            SmokeSignal::None
         );
+        // The genuine post-entrypoint milestones still pass.
         assert_eq!(
             classify_smoke_line("[Render thread/INFO]: Sound engine started"),
             SmokeSignal::Success
         );
+        assert_eq!(
+            classify_smoke_line(
+                "[Render thread/INFO]: OpenAL initialized on device CoreAudio Default"
+            ),
+            SmokeSignal::Success
+        );
+    }
+
+    /// Regression for the EXACT sprout false-pass. Verbatim lines from the
+    /// Valley of Plenty `crash-2026-05-19_14.41.11-client.txt` and its
+    /// `logs/`. BEFORE the fix, the `Setting user:` line returned `Success`
+    /// and `smoke_test` killed the JVM ~55s before this entrypoint crash
+    /// ever printed — the verifier reported a passing pack that hard-crashed
+    /// in real play.
+    #[test]
+    fn setting_user_then_entrypoint_crash_is_caught_not_passed() {
+        // 1. The pre-entrypoint line must be inert (no early success).
+        assert_eq!(
+            classify_smoke_line(
+                "[14:40:16] [Render thread/INFO]: Setting user: Kimcheee"
+            ),
+            SmokeSignal::None
+        );
+        // 2. The real sprout entrypoint failure must be a Failure that names
+        //    the culprit mod (so the repair loop can act on it).
+        match classify_smoke_line(
+            "[14:41:11] [main/ERROR]: Could not execute entrypoint stage 'main' \
+             due to errors, provided by 'sprout' at \
+             'tech.thatgravyboat.sprout.SproutFabric'!",
+        ) {
+            SmokeSignal::Failure { mod_name, .. } => {
+                assert_eq!(mod_name.as_deref(), Some("sprout"));
+            }
+            other => {
+                panic!("sprout entrypoint crash must be a Failure, got {other:?}")
+            }
+        }
     }
 
     #[test]
@@ -2539,6 +2873,160 @@ mod smoke_tests {
             SmokeSignal::Failure { .. }
         ));
     }
+
+    /// The real Valley of Plenty mod-resolution reject (verbatim from its
+    /// `.anvil-dump/logs/latest.log`). The parser MUST collapse Fabric's four
+    /// misleading per-consumer "Replace" hints into the TWO root-cause repins
+    /// (fabric-api, seasons) — and fabric-api must be primary because it
+    /// blocks the most consumers and its floor must be the HIGHER 0.92.2
+    /// (antique_atlas/surveyor), not yacl's 0.92.0.
+    #[test]
+    fn valley_resolution_block_aggregates_to_root_cause_repins() {
+        let log = r#"
+[22:00:08] [main/ERROR]: Incompatible mods found!
+net.fabricmc.loader.impl.FormattedException: Some of your mods are incompatible with the game or each other!
+A potential solution has been determined, this may resolve your problem:
+	 - Replace mod 'YetAnotherConfigLib' (yet_another_config_lib_v3) 3.6.6+1.20.1-fabric with version 3.6.6+1.20.1- or later that is compatible with:
+		 - fabric-api 0.91.0+1.20.1
+	 - Replace mod 'Fabric Seasons' (seasons) 2.2.1+1.20 with version 2.4.2-BETA or later.
+	 - Replace mod 'Surveyor Map Framework' (surveyor) 1.2.1+1.20 with any version that is compatible with:
+		 - fabric-api 0.91.0+1.20.1
+	 - Replace mod 'Antique Atlas' (antique_atlas) 3.1.2+1.20 with any version that is compatible with:
+		 - fabric-api 0.91.0+1.20.1
+		 - surveyor, any version
+More details:
+	 - Mod 'Antique Atlas' (antique_atlas) 3.1.2+1.20 requires version 0.92.2+1.20.1 or later of mod 'Fabric API' (fabric-api), which can't be loaded due to other constraints!
+	 - Mod 'Surveyor Map Framework' (surveyor) 1.2.1+1.20 requires version 0.92.2+1.20.1 or later of mod 'Fabric API' (fabric-api), which can't be loaded due to other constraints!
+	 - Mod 'YetAnotherConfigLib' (yet_another_config_lib_v3) 3.6.6+1.20.1-fabric requires version 0.92.0+1.20.1 or later of mod 'Fabric API' (fabric-api), which can't be loaded due to other constraints!
+	 - Mod 'Fabric Seasons: Delight Refabricated Compat' (seasonsdelightrefabcompat) 1.0-1.20.1-2.2.0+refabricated requires version 2.4.2-BETA or later of mod 'Fabric Seasons' (seasons), but only the wrong version is present: 2.2.1+1.20!
+"#;
+        let rem = parse_fabric_remediation(log).expect("parses");
+        assert_eq!(rem.primary_dep_id.as_deref(), Some("fabric-api"));
+        assert_eq!(rem.actions.len(), 2, "two root causes: fabric-api, seasons");
+
+        let api = &rem.actions[0];
+        assert_eq!(api.dep_id, "fabric-api");
+        assert!(!api.add_missing);
+        assert_eq!(
+            api.want, ">=0.92.2+1.20.1",
+            "must pick the HIGHER floor, not yacl's 0.92.0"
+        );
+        assert_eq!(
+            api.holders,
+            vec![
+                "antique_atlas".to_string(),
+                "surveyor".to_string(),
+                "yet_another_config_lib_v3".to_string()
+            ]
+        );
+
+        let seasons = &rem.actions[1];
+        assert_eq!(seasons.dep_id, "seasons");
+        assert_eq!(seasons.want, ">=2.4.2-BETA");
+        assert_eq!(seasons.holders, vec!["seasonsdelightrefabcompat"]);
+
+        // The curator-facing message names the repins, not a downgrade.
+        assert!(rem.summary.contains("repin 'fabric-api' to >=0.92.2+1.20.1"));
+        assert!(rem.summary.contains("repin 'seasons' to >=2.4.2-BETA"));
+        assert!(rem.summary.contains("do NOT downgrade"));
+
+        // LOAD-BEARING: the `want` string we emit MUST round-trip through the
+        // SAME version engine range-aware edit_pack uses, and must ACCEPT a
+        // real newer fabric-api (build-metadata `+1.20.1` asymmetry is a known
+        // sharp edge in crate::version). If this fails the loop can never find
+        // fabric-api and escalates to DELETING it — catastrophic.
+        let api_req = crate::version::VersionReq::parse(&rem.actions[0].want)
+            .expect("the emitted want must parse as a VersionReq");
+        for v in ["0.92.2+1.20.1", "0.92.5+1.20.1", "0.100.1+1.20.1"] {
+            let cand = crate::version::Version::parse(v).unwrap();
+            assert!(
+                crate::version::satisfies(&cand, &api_req),
+                "emitted want {:?} must accept real fabric-api {v}",
+                rem.actions[0].want
+            );
+        }
+        // ...and must REJECT the too-old one that caused the crash.
+        let old = crate::version::Version::parse("0.91.0+1.20.1").unwrap();
+        assert!(
+            !crate::version::satisfies(&old, &api_req),
+            "emitted want must reject the old fabric-api 0.91.0"
+        );
+        let seasons_req =
+            crate::version::VersionReq::parse(&rem.actions[1].want)
+                .expect("seasons want must parse");
+        assert!(crate::version::satisfies(
+            &crate::version::Version::parse("2.4.2-BETA").unwrap(),
+            &seasons_req
+        ));
+    }
+
+    /// A standalone missing-dep reject (no "More details" umbrella) must still
+    /// yield an add-dependency action.
+    #[test]
+    fn standalone_missing_dep_becomes_add_action() {
+        let log = " - Mod 'Spectrum' (spectrum) 1.8.13 requires version \
+                    1.77.3 or later of mod 'Modonomicon' (modonomicon), \
+                    which is missing!";
+        let rem = parse_fabric_remediation(log).expect("parses");
+        assert_eq!(rem.actions.len(), 1);
+        let a = &rem.actions[0];
+        assert_eq!(a.dep_id, "modonomicon");
+        assert!(a.add_missing);
+        assert_eq!(a.want, ">=1.77.3");
+        assert_eq!(a.holders, vec!["spectrum"]);
+        assert!(rem.summary.contains("add dependency 'modonomicon'"));
+    }
+
+    /// REPRO (Harvest Hollow): the failure surfaced in the CLIENT smoke log,
+    /// not a Stage-2 server boot — `stage1_core` now runs THIS parser on the
+    /// resolution-reject class instead of the LLM analyst (curator.rs #63).
+    /// The line is verbatim from the real `<instance>/logs/latest.log`.
+    /// Asserts: (1) "Incompatible mods found" is a resolution reject, (2) the
+    /// parser names moonlight + the MC-prefixed floor, (3) the emitted `want`
+    /// round-trips through the SAME version engine the repin loop uses —
+    /// accepting the real available build `1.20-2.16.32-fabric` and rejecting
+    /// the stuck pin `1.20-2.13.82`. If (3) fails the repin can never land.
+    #[test]
+    fn harvest_hollow_client_smoke_reject_parses_deterministically() {
+        assert!(super::is_resolution_reject(
+            "Fabric rejected the pack: incompatible / missing mods"
+        ));
+        let log = "[10:58:06] [main/ERROR]: Incompatible mods found!\n\
+            A potential solution has been determined, this may resolve your problem:\n\
+            \t - Replace mod 'Moonlight' (moonlight) 1.20-2.13.82 with version 1.20-2.16.26 or later.\n\
+            More details:\n\
+            \t - Mod 'Supplementaries' (supplementaries) 1.20-3.1.43 requires version 1.20-2.16.26 or later of mod 'Moonlight' (moonlight), but only the wrong version is present: 1.20-2.13.82!\n";
+        let rem = parse_fabric_remediation(log).expect("parses");
+        assert_eq!(rem.primary_dep_id.as_deref(), Some("moonlight"));
+        assert_eq!(rem.actions.len(), 1);
+        let a = &rem.actions[0];
+        assert_eq!(a.dep_id, "moonlight");
+        assert!(!a.add_missing, "moonlight is present-but-wrong, a repin");
+        assert_eq!(a.want, ">=1.20-2.16.26");
+        assert_eq!(a.holders, vec!["supplementaries"]);
+        assert!(rem.summary.contains("repin 'moonlight' to >=1.20-2.16.26"));
+
+        let req = crate::version::VersionReq::parse(&a.want)
+            .expect("emitted want must parse as a VersionReq");
+        for ok in ["1.20-2.16.26-fabric", "1.20-2.16.32-fabric"] {
+            assert!(
+                crate::version::satisfies(
+                    &crate::version::Version::parse(ok).unwrap(),
+                    &req
+                ),
+                "emitted want {:?} must accept the real build {ok}",
+                a.want
+            );
+        }
+        assert!(
+            !crate::version::satisfies(
+                &crate::version::Version::parse("1.20-2.13.82-fabric")
+                    .unwrap(),
+                &req
+            ),
+            "emitted want must reject the stuck pin 1.20-2.13.82"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2548,7 +3036,7 @@ mod smoke_tests {
 mod dump_tests {
     use super::{
         drive_dump_server, eula_bytes, is_server_ready_line,
-        server_properties_bytes, DumpOutcome, LaunchEvent,
+        server_properties_bytes, DumpOutcome, Instance, LaunchEvent,
     };
 
     /// Regression-lock the EXACT server.properties bytes — `level-type=flat`
@@ -2807,5 +3295,76 @@ exit 0
             !dump_dir.join("dump").exists(),
             "a failed pass must not leave a dump/ to be parsed as truth"
         );
+    }
+
+    /// SURGICAL, EXPLICIT-ONLY one-shot: prove the world-gen gate catches the
+    /// REAL Stardew Hollow world-creation crash (villagernames 4.5.1
+    /// hard-refs `dev.mrsterner...GuardEntity`; guardvillagers 2.0.9 ships
+    /// `dev.sterner...`). Boots the REAL headless dedicated server with the
+    /// REAL pinned mod set and asserts `DumpOutcome::Crashed` — i.e. the
+    /// pre-quest gate would BLOCK. `#[ignore]` (a real ~2-3 min network+JVM
+    /// op); a hard id guard + a broken-pair guard so it can only ever run
+    /// against that one intentionally-broken instance. DO NOT generalize.
+    ///
+    ///   cargo test --lib \
+    ///     launch::dump_tests::live_stardew_hollow_world_gen_gate_blocks \
+    ///     -- --ignored --exact --nocapture
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn live_stardew_hollow_world_gen_gate_blocks() {
+        const ID: &str = "18b0bf8e343aa9f8bc78";
+        let home = std::env::var("HOME").expect("HOME set");
+        let base = std::path::PathBuf::from(&home).join(".anvil/instances");
+        let json = base.join(format!("{ID}.json"));
+        assert!(
+            json.exists(),
+            "guard: {ID} must be the broken Stardew Hollow instance"
+        );
+        let inst: Instance = serde_json::from_str(
+            &std::fs::read_to_string(&json).unwrap(),
+        )
+        .expect("instance json deserializes");
+        // Broken-pair guard: only ever run against the intended repro.
+        let names = inst
+            .mods
+            .iter()
+            .map(|m| m.name.to_lowercase())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(
+            names.contains("villagernames")
+                && names.contains("guardvillager"),
+            "guard: instance must still carry the villagernames + \
+             guardvillagers broken pair (revert it first)"
+        );
+
+        let mr = crate::modrinth::Modrinth::new();
+        let (tx, mut rx) =
+            tokio::sync::mpsc::unbounded_channel::<LaunchEvent>();
+        tokio::spawn(async move {
+            while let Some(ev) = rx.recv().await {
+                if let LaunchEvent::Status(s) = ev {
+                    eprintln!("[boot] {s}");
+                }
+            }
+        });
+
+        let outcome = super::registry_dump_pass(&inst, &mr, true, tx)
+            .await
+            .expect("registry_dump_pass never errors (it degrades)");
+        eprintln!("VERDICT: {outcome:?}");
+        match outcome {
+            DumpOutcome::Crashed { mod_name, reason } => {
+                eprintln!(
+                    "PASS — the gate BLOCKS quest-gen for this pack. \
+                     mod_name={mod_name:?}\nreason={reason}"
+                );
+            }
+            other => panic!(
+                "the world-gen gate MUST block this pack, got {other:?}"
+            ),
+        }
+        let _ = std::fs::remove_dir_all(base.join(ID).join(".anvil-dump"));
     }
 }

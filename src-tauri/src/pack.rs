@@ -205,7 +205,7 @@ pub struct ResolvedVersion {
 }
 
 impl ResolvedVersion {
-    fn to_entry(&self) -> ModEntry {
+    pub(crate) fn to_entry(&self) -> ModEntry {
         ModEntry {
             project_id: self.project_id.clone(),
             version_id: self.version_id.clone(),
@@ -279,7 +279,11 @@ fn loader_satisfies(version_loaders: &[String], pack_loader: &str) -> bool {
     pack_loader == "quilt" && version_loaders.iter().any(|l| l == "fabric")
 }
 
-fn version_compatible(v: &ResolvedVersion, mc_version: &str, loader: &str) -> bool {
+pub(crate) fn version_compatible(
+    v: &ResolvedVersion,
+    mc_version: &str,
+    loader: &str,
+) -> bool {
     v.game_versions.iter().any(|g| g == mc_version) && loader_satisfies(&v.loaders, loader)
 }
 

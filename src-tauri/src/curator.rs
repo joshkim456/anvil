@@ -93,14 +93,14 @@ How you work:
 - Talk naturally. Do not interrogate the player with a form. Through normal conversation, make sure that before you propose a pack you know: the theme or genre they want (tech, magic, exploration, kitchen-sink, performance-only, etc.); the Minecraft version and the mod loader; whether they play single-player or multiplayer; and their performance target (a low-end machine versus a powerful one). ANVIL v1 IS FABRIC ONLY: always build on Fabric. If the player asks for Forge or NeoForge, briefly explain Anvil currently builds Fabric packs only (1.20.1 Fabric is the fully verified path, quests included) and proceed on Fabric — never call a tool with loader forge or neoforge, it is hard-blocked. Default to 1.20.1 Fabric, and require 1.20.1 Fabric whenever quests are wanted. If something is missing, ask for it in a light, conversational way, ideally folding the question into your reply rather than stacking questions.
 - Use the tools to find real mods on Modrinth. Never invent or guess a mod name, slug, or id. Once you know the theme, Minecraft version and loader, your FIRST move is propose_pack with a one-line brief: it returns a popular, relevant, dependency-resolved candidate pack in one call, and that exact resolved set is SAVED for this conversation. Review and refine it with the player (use search_mods/get_mod only for specific swaps or to confirm a single mod), rather than building the whole pack by hand search by search. To build the proposed pack, call assemble_pack with the name, Minecraft version, loader and loader_version — you may pass an EMPTY mods list and it assembles the saved proposal, so you never need to re-list every mod or re-run propose_pack to recover the list. Only pass explicit {project_id, version_id} pairs when the player asked for specific swaps. assemble_pack MERGES into an existing same-named pack: to ADD a mod later, call it with ONLY the new mod (existing mods are kept automatically — never re-send the whole list to "preserve" it). To REMOVE a mod or rebuild from scratch, pass replace:true with the full intended list.
 - Prioritise quality. Every search result includes a downloads count. Strongly prefer well-established, popular mods (high downloads, clearly maintained for the target version). Do not add obscure, abandoned, or very-low-download mods just to fill a slot. If the only option for a requested feature is low quality, say so plainly and let the player decide rather than padding the pack with weak mods.
-- Be honest about numbers. Never announce, promise, or estimate a mod count (for example "150+ mods") that you have not actually assembled. Do not pad a pack with filler mods to reach a target number, and never claim a count to satisfy the player. Only state a mod count after validate_pack has passed, and state the true count of the validated list. If the player asked for more mods than you can fill with genuinely good ones, deliver the smaller quality set and say so plainly; quality and coherence always beat hitting a number.
+- Be honest about numbers. Never announce, promise, or estimate a mod count (for example "150+ mods") that you have not actually assembled. Do not pad a pack with filler mods to reach a target number, and never claim a count to satisfy the player. Only state a mod count after assemble_pack has succeeded, and state the true count of the assembled list. If the player asked for more mods than you can fill with genuinely good ones, deliver the smaller quality set and say so plainly; quality and coherence always beat hitting a number.
 - Draw inspiration from real packs. For a themed or genre request, proactively call seed_from_pack on a well-known pack in that space (for example a popular Create, skyblock, or adventure pack) and study its actual mod list to see which mods the community relies on for that theme. Treat it as inspiration for your own curated selection: keep the strong, popular building blocks, drop what does not fit this player, and adapt with search_mods. Never copy a pack wholesale.
 - When you propose a pack, give a short one-line reason for each mod so the player understands why it is there. Keep it tight and useful, not flowery.
 - If a concept the player asked for is not available on Modrinth for their version and loader, say so plainly and tell them the substitute you are using and why. Never swap something silently.
-- Always call validate_pack on a candidate pack before you present it as ready. Only call assemble_pack after validate_pack comes back clean. If validation fails, fix the pack (swap or drop the offending mods, adjust versions) and validate again.
-- After a pack is assembled and looks final, call verify_pack ONCE before you tell the player it is done: it boots the pack headless (about a minute, say so) and confirms every mod initializes. If it returns VERIFIED, confirm the pack works. If it returns a VERIFICATION FAILED analysis, relay the culprit and fix in plain words and ASK the player before changing anything (surface and wait, never modify the pack unprompted). If they approve, call assemble_pack again with the SAME name minus the culprit mod, then call verify_pack one more time — at most once, never loop verify/assemble. Do not call verify_pack after every small change, only when the pack is final or the player asks.
-- After a pack is assembled, briefly confirm what was built and where it lives.
-- If the player wants a storyline, quests, or a sense of progression, the quest system is Heracles (published on Modrinth as "Odyssey Quests", slug odyssey-quests). Quests require the pack to be Minecraft 1.20.1 on fabric or forge, and the pack must include both odyssey-quests and its dependency resourceful-lib. So: tell the player quests need a 1.20.1 fabric/forge pack and steer the version/loader there if not set, search_mods for "odyssey-quests" and "resourceful-lib" and include both real mods, build the pack first, then add quests. After assembly, the instance id and full mod list are given to you in an ACTIVE PACK STATE block at the top of the conversation — call generate_quests with THAT instance id directly. Never call assemble_pack again just to rediscover the instance id, and if a pack is already assembled and the player asks for quests, your next tool call is generate_quests, not propose_pack or assemble_pack.
+- There is no separate validate step and assemble_pack does NOT statically refuse. It resolves the full dependency closure and auto-repins versions so the pack is dependency-complete, then ALWAYS writes it and the conversation enters the `assembled` state. Whether the pack actually works is decided by verify_pack (a real headless boot) — that is the sole authority, not any static check. Just assemble a sensible set; verification + autonomous repair handle the rest.
+- The MOMENT assemble_pack succeeds, your very next tool call is verify_pack — BEFORE you present the pack breakdown and BEFORE you ask the player about quests/origins. Never ask the player to approve quest work on a pack that has not been verified to boot. verify_pack boots the pack headless (a minute or two, say so) and confirms it reaches mod resolution AND world creation. If it returns VERIFIED, confirm the pack works. If it returns VERIFICATION FAILED / BLOCKED, the pack does not boot: repair it AUTONOMOUSLY with edit_pack following the message's HOW-TO-FIX steps (repin/add the named dependency first; remove a mod only as the last resort), then call verify_pack again. Do NOT ask the player's permission for a version repin or a dependency add — just do it and report each change in one short line. Do NOT use assemble_pack to rebuild from scratch for a repair. Keep repairing and re-verifying until it boots or verify_pack tells you the budget is EXHAUSTED — only then stop, surface exactly what is failing, and ask the player how to proceed. The loop also pauses itself periodically (it will say so); when it does, end your reply with what you changed and continue on the next message.
+- Only AFTER verify_pack passes do you present the pack: briefly confirm what was built, that it boots cleanly, and where it lives, then ask about quests. If the gate ended EXHAUSTED, lead with exactly what will not boot and what you tried — never a "ready!" summary for a pack that does not launch.
+- If the player wants a storyline, quests, or a sense of progression, the quest system is Heracles (published on Modrinth as "Odyssey Quests", slug odyssey-quests). Quests require the pack to be Minecraft 1.20.1 on fabric or forge, and the pack must include both odyssey-quests and its dependency resourceful-lib. So: tell the player quests need a 1.20.1 fabric/forge pack and steer the version/loader there if not set, search_mods for "odyssey-quests" and "resourceful-lib" and include both real mods, build the pack first, then add quests. After assembly, the instance id and full mod list are given to you in an ACTIVE PACK STATE block at the top of the conversation — call generate_quests with THAT instance id directly. Never call assemble_pack again just to rediscover the instance id. If a pack is already assembled and the player asks for quests, the pack must PASS verify_pack first — your next tool call is verify_pack; the quest/origin tools only become available once it verifies. Never propose_pack or assemble_pack to get there.
 - Custom recipes that knit the pinned mods together (one mod's output feeding another mod's recipe, new crafting/smelting bridges) are also part of progression, and they are quest NODES, not a separate system: a quest node may carry a "recipes" array, which makes it a quest to obtain the bridged item AND injects the recipe into a vanilla 1.20.1 datapack loaded by Open Loader. If the player wants custom recipes or cross-mod crafting, the pack MUST include open-loader (Modrinth slug open-loader; 1.20.1 fabric or forge); search_mods for "open-loader" and include the real mod, build the pack first, then design recipe-bridge nodes inside generate_quests.
 - Design quests to the standard of a real, well-loved kitchen-sink pack (think All the Mods, Create: Above and Beyond): a deep, interconnected progression web, NOT a short flat list. Concretely:
   - Structure it in chapters that are progression tiers/themes. Start with a small "Getting Started" hub chapter (basic tools, food, first ores). Then one themed questline chapter per MAJOR mod actually in this pack (study the assembled mod list and build an arc around each big mod: its starter item, its core machine/mechanic, an advanced build, a mastery goal). Finish with a milestone/endgame chapter whose quests depend on several mod chapters converging.
@@ -111,8 +111,8 @@ How you work:
   - Lay nodes on a readable grid: x increases with each progression tier, y separates parallel branches, about 2.0 units spacing. Only reference items, entities, and advancements from mods actually in the assembled pack; generate_quests rejects anything else.
 - Quality-of-life baseline (always raise this, and heavily suggest it). Early in the conversation, once you know the Minecraft version and loader, ask the player whether to include a standard quality-of-life and performance set, and strongly recommend saying yes (default to including it unless they decline). Fold it into the conversation as one light question, not a checklist. The set is: a recipe/item viewer (MANDATORY — see below), a minimap and a world map (Xaero's Minimap and Xaero's World Map), AppleSkin (food and saturation tooltips), Controlling (searchable keybinds), an inventory sorting mod, Mouse Tweaks, and a loader-appropriate performance stack that is compatible with content mods (on Fabric or Quilt: Sodium, plus Indium whenever the pack needs the Fabric Rendering API, plus Lithium, FerriteCore, and Entity Culling; on Forge or NeoForge the equivalents such as Embeddium or Rubidium, FerriteCore, and an entity-culling mod). Never use OptiFine, which breaks content mods. A recipe/item viewer is NOT optional and is NOT subject to the player declining the QoL set: EVERY pack that contains any crafting or machine content mod MUST include one, because without it the player literally cannot discover recipes (tech mods like Modern Industrialization, Tech Reborn, Create, AE2 are unusable without it). Always include EMI (the most broadly compatible viewer and the one tech mods explicitly recommend); JEI or REI are acceptable only if EMI has no compatible build for this version/loader. Search_mods for it and include it even if the player declined everything else. Mod names change between versions and loaders, so search_mods for the current mod that fills each role for THIS version and loader (for example the modern inventory-sorting mod is not the legacy 1.12 "Inventory Tweaks"); include only ones that actually exist and are compatible, skip any OTHER role with no good option for this version (but never skip the recipe viewer), and tell the player exactly which QoL mods you added. If the player signals weak or low-end hardware or a laptop, include the performance stack regardless and say so plainly.
 - Keep seed_from_pack natural. If the player points at an existing pack or asks for something like a known pack, use seed_from_pack to ground the build on a real pack, then adapt it with search_mods rather than copying it wholesale.
-- Be efficient with tools and converge decisively. In a single turn, issue several search_mods or get_mod calls together rather than one at a time. Do not search endlessly or narrate every step. Size the pack to the request: a focused pack is roughly 15 to 35 mods; a kitchen-sink or "as many as possible" request can be larger, but it is a curated set of quality mods, not a race to a number. Once you have a coherent set that covers the player's theme well, stop searching, call validate_pack, then assemble_pack. Do not keep searching to inflate the count, and do not re-assemble repeatedly chasing a bigger number; if the player asks for more after seeing a pack, add a few specific quality mods and re-assemble once. You have a hard limit on tool rounds, so converge and assemble well before you reach it; a good assembled pack now beats a perfect one that never finishes.
-- Iterating is expected and good. The player may keep talking after a pack is assembled and ask for changes. Treat that as normal. For a focused change to an already-assembled pack — add a mod, remove a mod, swap one for another — call edit_pack with the ACTIVE PACK STATE instance id and only the delta (add:[{project_id}], remove:[project_id]); it pulls required deps, blocks conflicts, refuses an unsafe removal with the requiring mods named (then also remove those if the player insists), and keeps every other mod's exact version. Obey edit_pack's recoverable refusal/conflict messages exactly, then call it again. Use assemble_pack again (SAME pack name) only for a from-scratch rebuild or a large set change. Only use a different name if the player clearly wants a separate, new pack.
+- Be efficient with tools and converge decisively. In a single turn, issue several search_mods or get_mod calls together rather than one at a time. Do not search endlessly or narrate every step. Size the pack to the request: a focused pack is roughly 15 to 35 mods; a kitchen-sink or "as many as possible" request can be larger, but it is a curated set of quality mods, not a race to a number. Once you have a coherent set that covers the player's theme well, stop searching and call assemble_pack (it resolves deps + repins versions and ALWAYS builds; the verify boot, not a static check, decides if it works). Do not keep searching to inflate the count, and do not re-assemble repeatedly chasing a bigger number; if the player asks for more after seeing a pack, add a few specific quality mods and re-assemble once. You have a hard limit on tool rounds, so converge and assemble well before you reach it; a good assembled pack now beats a perfect one that never finishes.
+- Iterating is expected and good. The player may keep talking after a pack is assembled and ask for changes. Treat that as normal. For a focused change to an already-assembled pack — add a mod, remove a mod, swap one for another — call edit_pack with the ACTIVE PACK STATE instance id and only the delta (add:[{project_id}], remove:[project_id]); it pulls required deps, blocks conflicts, refuses an unsafe removal with the requiring mods named (then also remove those if the player insists), and keeps every other mod's exact version. Obey edit_pack's recoverable refusal/conflict messages exactly, then call it again. Once a pack is assembled, edit_pack is the ONLY way to change its mods — assemble_pack is not available after assembly. A genuinely separate, brand-new pack means a new chat.
 
 Voice: concise and warm. No purple prose. No em dashes. Plain sentences, short paragraphs."#;
 
@@ -174,36 +174,41 @@ fn system_prompt_for(phase: &str) -> &'static str {
 /// focused and makes whole classes of mistake impossible (a quest turn cannot
 /// call assemble_pack, a curating turn cannot call generate_quests).
 fn tool_specs_for(phase: &str) -> Value {
+    // Tool scoping IS the lifecycle enforcement (a state the model cannot
+    // narrate around). Mod-mutation only in `assembled`; content only in
+    // `progression`; the only path between them is the verify pipeline
+    // passing. No `validate_pack` anywhere — it is an enforced invariant of
+    // assemble_pack/edit_pack, not a tool.
     let allow: &[&str] = match phase {
-        // The progression surface: generate_quests (recipes are a quest-node
-        // facet of it — no separate recipe tool) + get_mod + query_registry
-        // (the Slice-1 grounded id/label search so design is push-grounded,
-        // not post-linted).
-        "progression" => {
-            &["generate_quests", "generate_origins", "query_registry", "get_mod"]
-        }
-        "complete" => {
-            &["generate_quests", "generate_origins", "query_registry", "get_mod"]
-        }
+        // assembled = the verify + repair loop. No quest/origin tools (cannot
+        // author content on an unverified pack), no propose/assemble (cannot
+        // spawn new instances → no spiral), no query_registry (that is a
+        // content tool). search_mods/get_mod stay so the model can find a
+        // dependency/replacement project id to feed edit_pack.
         "assembled" => &[
-            "propose_pack",
+            "verify_pack",
+            "edit_pack",
             "search_mods",
             "get_mod",
-            "validate_pack",
-            "assemble_pack",
-            "edit_pack",
-            "verify_pack",
+        ],
+        // progression/complete = content authoring. verify_pack stays because
+        // generate_quests/origins WRITE datapacks that can themselves break
+        // world creation, so the generated content must be re-verified. No
+        // edit_pack/get_mod/search_mods: a mod change is a repair → it sends
+        // the thread back to `assembled`, it does not happen here.
+        "progression" | "complete" => &[
             "generate_quests",
             "generate_origins",
             "query_registry",
+            "verify_pack",
         ],
-        // curating (default): full pack-building set, no progression tools yet.
+        // curating (default): build the pack once. No validate_pack (built
+        // into assemble_pack's refuse-on-blocking-issues).
         _ => &[
             "propose_pack",
             "search_mods",
             "get_mod",
             "seed_from_pack",
-            "validate_pack",
             "assemble_pack",
         ],
     };
@@ -273,21 +278,35 @@ fn active_pack_preamble(thread_id: Option<&str>) -> Option<String> {
              conversation text implies; trust THIS, not your memory of earlier \
              tool calls, which you can no longer see):\n\
              A modpack is ALREADY ASSEMBLED for this conversation. Do NOT call \
-             propose_pack, do NOT call assemble_pack to rebuild it, and do NOT \
-             re-scout mods, unless the player explicitly asks for a different or \
-             brand-new pack.\n\
-             - instance_id: {iid}  (pass this EXACT id to generate_quests and \
-             query_registry)\n\
-             - name: {name}  (pass this EXACT name to assemble_pack ONLY if the \
-             player asks to change the mod list; it updates this instance in \
-             place)\n\
+             propose_pack, do NOT re-scout mods, and do NOT call assemble_pack \
+             for a from-scratch rebuild, unless the player explicitly asks for \
+             a different or brand-new pack.\n\
+             - instance_id: {iid}  (pass this EXACT id to generate_quests, \
+             query_registry, verify_pack and edit_pack)\n\
+             - name: {name}\n\
              - Minecraft {mc} on {loader}\n\
              - {total} mods: {mod_list}\n\
-             To build or extend the questline, call generate_quests with \
-             instance_id \"{iid}\" directly — the instance already exists, you \
-             do NOT need to assemble anything first and you must NOT re-derive \
-             the instance id by re-assembling. If the player asked for quests, \
-             your next tool call should be generate_quests, not propose_pack.",
+             LIFECYCLE (enforced by which tools exist — do not fight it): the \
+             pack must PASS verify_pack before any quest/origin work. While it \
+             is unverified the ONLY useful tool is verify_pack; the \
+             quest/origin tools are not even available yet — do not attempt \
+             them, the call will be rejected.\n\
+             If verify_pack returns BLOCKED / VERIFICATION FAILED, the pack \
+             does not boot: repair it in place with edit_pack per the message's \
+             steps and call verify_pack again. Do NOT stop, do NOT narrate \
+             around it, do NOT ask permission for a version repin or a \
+             dependency add (just do it, report each change in one short line). \
+             Removing a mod is the LAST resort. Do NOT call assemble_pack to \
+             rebuild — edit_pack mutates THIS instance in place. If verify_pack \
+             ESCALATES (asks for a player decision: swap-for-alternative vs \
+             delete), relay exactly that to the player and STOP — every tool \
+             is paused until they answer.\n\
+             When verify_pack returns VERIFIED the conversation automatically \
+             advances and the quest/origin tools become available; only THEN \
+             call generate_quests / generate_origins with instance_id \
+             \"{iid}\". If the player asked for quests and the pack is not \
+             verified yet, your next tool call is verify_pack — never \
+             propose_pack or assemble_pack.",
             iid = iid,
             name = inst.name,
             mc = inst.mc_version,
@@ -354,6 +373,15 @@ pub async fn run_turn(
     user_message: String,
     tx: UnboundedSender<CuratorEvent>,
 ) -> anyhow::Result<Vec<ChatMsg>> {
+    // A new user message IS the player's reply to any pending escalation —
+    // clear the structural pause so the assembled tools work again this turn
+    // (the model can now act on their A/B choice).
+    if let Some(iid) = thread_id
+        .and_then(crate::chat::load_thread)
+        .and_then(|t| t.instance_id)
+    {
+        clear_awaiting(&iid);
+    }
     let system_prompt = system_prompt_for(phase);
     // Static prompt+tools are one cached block; the per-thread ground-truth
     // preamble is a second cached block. Both use a 1h TTL so a human-paced
@@ -914,31 +942,8 @@ fn tool_specs() -> Value {
             }
         },
         {
-            "name": "validate_pack",
-            "description": "Validate a candidate pack against the chosen Minecraft version and loader. Returns a JSON array of issues; an empty array means the pack is coherent. You must call this and get an empty result before calling assemble_pack.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "mc_version": { "type": "string" },
-                    "loader": { "type": "string", "description": "fabric, forge, neoforge, or quilt." },
-                    "mods": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "project_id": { "type": "string" },
-                                "version_id": { "type": "string" }
-                            },
-                            "required": ["project_id", "version_id"]
-                        }
-                    }
-                },
-                "required": ["mc_version", "loader", "mods"]
-            }
-        },
-        {
             "name": "assemble_pack",
-            "description": "Assemble the final pack: creates a local instance and writes a standard .mrpack. Runs validation first and refuses to assemble an invalid pack. Only call this after validate_pack returned an empty issue list. MERGE SEMANTICS: if a pack with this name already exists, `mods` is MERGED into it (existing mods kept; a mod you list with a new version_id updates that one). So to ADD a mod to an existing pack, pass ONLY the new mod — do NOT re-send the whole list and do NOT fear overwriting. You CANNOT drop a mod by omitting it; removing mods or a clean rebuild requires `replace: true` with the full intended list.",
+            "description": "Assemble the final pack: creates a local instance and writes a standard .mrpack. It resolves the full dependency closure and auto-repins versions so the pack is dependency-complete, then ALWAYS writes it and enters the `assembled` state — it does NOT statically refuse (a real verify boot is the authority, not a static check; there is no separate validate step). You MUST call verify_pack next; if it fails, repair with edit_pack and re-verify. MERGE SEMANTICS: if a pack with this name already exists, `mods` is MERGED into it (existing mods kept; a mod you list with a new version_id updates that one). So to ADD a mod to an existing pack, pass ONLY the new mod — do NOT re-send the whole list and do NOT fear overwriting. You CANNOT drop a mod by omitting it; removing mods or a clean rebuild requires `replace: true` with the full intended list.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -964,7 +969,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "verify_pack",
-            "description": "Boot the assembled pack ONCE, headless (~1 minute), to confirm every mod actually initializes — this catches launch-breaking problems that no metadata reveals (an API-incompatible major, a runtime mixin failure). On success it reports the pack is confirmed working. On failure it returns an automated crash analysis naming the culprit mod and the recommended fix. Call this AFTER assemble_pack succeeds and the pack looks final, BEFORE you tell the player it is done; do NOT call it after every small tweak. If it reports a failure: relay the analysis in plain words and ASK the player before changing anything (surface and wait). If they approve a fix, call assemble_pack again with the SAME name minus the culprit mod, then call verify_pack ONE more time — at most once, never loop.",
+            "description": "Boot the assembled pack headless (~1-2 minutes), reaching BOTH mod resolution AND world creation, to catch launch-breaking problems no metadata reveals (an unsatisfiable dependency, an API-incompatible major, a runtime mixin failure). On success it confirms the pack works and grounds the registry on the real runtime ids. On failure it returns the root-cause fix (Fabric's own resolved dependency repins, or a crash analysis naming the culprit). Call this AFTER assemble_pack succeeds and the pack looks final. If it returns BLOCKED/VERIFICATION FAILED: repair the pack in place with edit_pack per the message's HOW-TO-FIX steps (repin/add first, remove last), do NOT ask permission for a repin or dep-add, do NOT reassemble from scratch, then call verify_pack again — loop this until it boots or verify_pack reports the budget is EXHAUSTED (only then surface to the player and ask). The gate paginates itself to avoid timeouts and will tell you when to pause.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1212,7 +1217,8 @@ fn tool_specs() -> Value {
                             "type": "object",
                             "properties": {
                                 "project_id": { "type": "string", "description": "Modrinth project id (or slug) to add." },
-                                "version_id": { "type": "string", "description": "OPTIONAL exact Modrinth version id. Omit to let the resolver pick the best version compatible with this pack's Minecraft version + loader." }
+                                "version_id": { "type": "string", "description": "OPTIONAL exact Modrinth version id. Omit to let the resolver pick the best version compatible with this pack's Minecraft version + loader." },
+                                "version_req": { "type": "string", "description": "OPTIONAL Fabric-style version range, e.g. \">=0.92.2+1.20.1\". Use this to act on a verification BLOCKED message's repin/add instructions directly — we resolve the newest Modrinth version satisfying it for this MC+loader. You never need to know a concrete version_id. Ignored if version_id is set." }
                             },
                             "required": ["project_id"]
                         }
@@ -1303,18 +1309,42 @@ async fn execute_tool(
             }
         }
     }
+    // Structural escalation pause: when a verify stage exhausted its budget
+    // the gate set an `awaiting` decision on the instance. Until the player
+    // answers (their next message clears it in run_turn), every `assembled`
+    // tool refuses — the model has NO usable tool, so it MUST relay the A/B
+    // choice and wait. A message the model can ignore is not a pause; a tool
+    // that refuses is (the propose/assemble lesson, applied again).
+    if matches!(name, "edit_pack" | "verify_pack" | "search_mods" | "get_mod")
+    {
+        if let Some(iid) = thread_id
+            .and_then(crate::chat::load_thread)
+            .and_then(|t| t.instance_id)
+        {
+            if let Some(pending) = awaiting_decision(&iid) {
+                return Ok(format!(
+                    "BLOCKED: a player decision is required before any \
+                     further tool use on this pack. Do NOT call tools — put \
+                     this to the player and wait for their answer:\n{pending}"
+                ));
+            }
+        }
+    }
     match name {
         "propose_pack" => tool_propose_pack(mr, thread_id, input, tx).await,
         "search_mods" => tool_search_mods(mr, input, tx).await,
         "get_mod" => tool_get_mod(mr, input, tx).await,
-        "validate_pack" => tool_validate_pack(mr, input, tx).await,
         "assemble_pack" => tool_assemble_pack(mr, thread_id, input, tx).await,
         "edit_pack" => tool_edit_pack(mr, thread_id, input, tx).await,
         "seed_from_pack" => tool_seed_from_pack(mr, input, tx).await,
-        "generate_quests" => tool_generate_quests(thread_id, input, tx).await,
-        "generate_origins" => tool_generate_origins(thread_id, input, tx).await,
+        "generate_quests" => {
+            tool_generate_quests(mr, thread_id, input, tx).await
+        }
+        "generate_origins" => {
+            tool_generate_origins(mr, thread_id, input, tx).await
+        }
         "query_registry" => tool_query_registry(input, tx).await,
-        "verify_pack" => tool_verify_pack(input, tx).await,
+        "verify_pack" => tool_verify_pack(mr, input, tx).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -2105,8 +2135,12 @@ pub(crate) enum EditError {
     StillRequired(Vec<StillRequired>),
     /// The resolved set has blocking issues (an add introduced an
     /// incompatibility / unresolved dependency). The purely-informational
-    /// `IncompatibleAddonDropped` never appears here.
-    Conflicts(Vec<pack::ValidationIssue>),
+    /// `IncompatibleAddonDropped` never appears here. The `Option<Box<
+    /// EditResult>>` is the would-be closure: `Some` for post-resolution
+    /// constraint conflicts (the version-string false-positive class — the
+    /// Layer-1 force-through can write it so the real boot adjudicates);
+    /// `None` for genuinely unresolvable deps (never forceable).
+    Conflicts(Vec<pack::ValidationIssue>, Option<Box<EditResult>>),
     /// Resolution itself failed (Modrinth unreachable, etc.).
     Resolve(String),
 }
@@ -2163,253 +2197,211 @@ async fn edit_instance_mods_with_state(
     remove: &[String],
     vcache: &mut VersionCache,
     scache: &mut SideCache,
-    scanned: &mut std::collections::HashSet<String>,
-    provided: &mut std::collections::HashSet<String>,
-    manifests: &mut std::collections::HashMap<
+    _scanned: &mut std::collections::HashSet<String>,
+    _provided: &mut std::collections::HashSet<String>,
+    _manifests: &mut std::collections::HashMap<
         String,
         crate::registry::JarManifest,
     >,
 ) -> Result<EditResult, EditError> {
-    use std::collections::HashSet;
+    use std::collections::{HashSet, VecDeque};
 
-    let remove_set: HashSet<&str> =
-        remove.iter().map(String::as_str).collect();
+    // TARGETED DELTA — NOT a closure re-resolution. Existing mods are carried
+    // through verbatim and NEVER re-fetched/re-pinned (re-resolving the whole
+    // closure every call, esp. fabric-api's huge version list, was the
+    // "transient Modrinth" dead-end). Only the explicitly added project and
+    // its genuinely-MISSING required deps touch Modrinth. Conflicts are NOT
+    // checked statically — the verify boot is the sole authority.
 
-    // roots0: explicit roots paired with their currently-pinned versions so
-    // re-resolving for ONE change does not silently bump every other mod.
-    // Back-compat: empty `roots` => treat every pinned mod as a root.
-    let roots0: Vec<ModRef> = if inst.roots.is_empty() {
-        inst.mods
-            .iter()
-            .filter(|m| !m.project_id.is_empty())
-            .map(|m| ModRef {
-                project_id: m.project_id.clone(),
-                version_id: m.version_id.clone(),
-            })
-            .collect()
+    // Base = current pinned set minus removals. PinnedMod carries no side
+    // data; default to the Modrinth norm — the .mrpack `env` is cosmetic for
+    // our boot flow (the server/client read each jar's own fabric.mod.json).
+    let mut entries: Vec<ModEntry> = Vec::new();
+    let mut present: HashSet<String> = HashSet::new();
+    let mut removed: Vec<String> = Vec::new();
+    // Canonical ids of the mods we actually removed — used to also drop them
+    // from `roots` (which stores canonical ids, not slugs).
+    let mut removed_canon: HashSet<String> = HashSet::new();
+    for m in &inst.mods {
+        // The curator passes whatever the crash analysis / Fabric output gave
+        // it: a Modrinth slug, a canonical id, OR a jar filename. The instance
+        // stores canonical ids only. Match flexibly so a slug/jar-name target
+        // is not silently a no-op (the "edit_pack: no change" bug): id-equals,
+        // OR jar-stem equals, OR jar-stem starts with "<slug>-" (Modrinth jar
+        // filenames lead with the slug).
+        let stem =
+            m.name.strip_suffix(".jar").unwrap_or(&m.name).to_lowercase();
+        let hit = remove.iter().any(|r| {
+            let r = r.trim();
+            if r.is_empty() {
+                return false;
+            }
+            let rl = r.to_lowercase();
+            m.project_id == r || stem == rl || stem.starts_with(&(rl + "-"))
+        });
+        if hit {
+            removed.push(
+                m.name.strip_suffix(".jar").unwrap_or(&m.name).to_string(),
+            );
+            removed_canon.insert(m.project_id.clone());
+            continue;
+        }
+        present.insert(m.project_id.clone());
+        entries.push(ModEntry {
+            project_id: m.project_id.clone(),
+            version_id: m.version_id.clone(),
+            path: m.path.clone(),
+            sha1: m.sha1.clone(),
+            sha512: m.sha512.clone(),
+            downloads: vec![m.download_url.clone()],
+            file_size: m.file_size,
+            game_versions: Vec::new(),
+            loaders: Vec::new(),
+            // Carry the original env forward so the rewritten .mrpack keeps
+            // client-only mods correct (no flatten-to-required regression).
+            client_side: m.client_side.clone(),
+            server_side: m.server_side.clone(),
+        });
+    }
+
+    // roots = declared roots (or every mod, legacy-empty) minus removals.
+    let base_roots: Vec<String> = if inst.roots.is_empty() {
+        inst.mods.iter().map(|m| m.project_id.clone()).collect()
     } else {
-        inst.roots
-            .iter()
-            .filter(|p| !p.is_empty())
-            .map(|pid| ModRef {
-                project_id: pid.clone(),
-                version_id: inst
-                    .mods
-                    .iter()
-                    .find(|m| &m.project_id == pid)
-                    .map(|m| m.version_id.clone())
-                    .unwrap_or_default(),
-            })
-            .collect()
+        inst.roots.clone()
     };
+    let mut roots: Vec<String> = base_roots
+        .into_iter()
+        .filter(|p| !p.is_empty() && !removed_canon.contains(p))
+        .collect();
 
-    // An add without an explicit version_id must be pinned to a concrete best
-    // compatible version NOW: a ROOT pin needs a version (the resolver only
-    // auto-picks for a transitive dep, not a root). Same selection
-    // assemble/propose use (release < beta < alpha, then newest, then id).
-    // No compatible version => a real "cannot add" conflict, surfaced
-    // structured rather than as an opaque resolver error.
-    let mut add_resolved: Vec<ModRef> = Vec::with_capacity(add.len());
-    let mut unresolvable: Vec<pack::ValidationIssue> = Vec::new();
-    for a in add {
-        if a.project_id.is_empty() {
-            continue;
-        }
-        if !a.version_id.is_empty() {
-            add_resolved.push(ModRef {
-                project_id: a.project_id.clone(),
-                version_id: a.version_id.clone(),
-            });
-            continue;
-        }
-        let versions = match cached_versions(mr, vcache, &a.project_id).await
-        {
-            Ok(v) => v.clone(),
-            Err(e) => return Err(EditError::Resolve(e)),
-        };
-        let best = versions
+    let mc = inst.mc_version.clone();
+    let loader = inst.loader.clone();
+    // Channel-ranked newest-compatible pick (release < beta < alpha, then
+    // newest date, then id) — the same selection assemble uses.
+    let pick_compatible = |versions: &[crate::modrinth::Version]| {
+        versions
             .iter()
             .filter(|v| {
-                v.game_versions.iter().any(|g| g == &inst.mc_version)
-                    && (v.loaders.iter().any(|l| l == &inst.loader)
-                        || (inst.loader == "quilt"
-                            && v.loaders.iter().any(|l| l == "fabric")))
+                to_resolved(v, "required", "required")
+                    .map(|rv| pack::version_compatible(&rv, &mc, &loader))
+                    .unwrap_or(false)
             })
             .min_by(|x, y| {
                 vt_rank(&x.version_type)
                     .cmp(&vt_rank(&y.version_type))
                     .then(y.date_published.cmp(&x.date_published))
                     .then(x.id.cmp(&y.id))
-            });
-        match best {
-            Some(v) => add_resolved.push(ModRef {
-                project_id: a.project_id.clone(),
-                version_id: v.id.clone(),
-            }),
-            None => {
-                unresolvable.push(
-                    pack::ValidationIssue::IncompatibleGameVersion {
-                        project_id: a.project_id.clone(),
-                        want: inst.mc_version.clone(),
-                    },
-                );
-            }
-        }
-    }
-    if !unresolvable.is_empty() {
-        return Err(EditError::Conflicts(unresolvable));
-    }
-
-    // new_roots = (roots0 - remove) ∪ add. Adds come FIRST so an add of an
-    // already-present project can re-pin its version (mirrors `merge_roots`:
-    // the explicit call wins a project_id collision).
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut new_roots: Vec<ModRef> = Vec::new();
-    for r in &add_resolved {
-        if remove_set.contains(r.project_id.as_str()) {
-            continue;
-        }
-        if seen.insert(r.project_id.clone()) {
-            new_roots.push(ModRef {
-                project_id: r.project_id.clone(),
-                version_id: r.version_id.clone(),
-            });
-        }
-    }
-    for r in roots0 {
-        if remove_set.contains(r.project_id.as_str()) {
-            continue;
-        }
-        if seen.insert(r.project_id.clone()) {
-            new_roots.push(r);
-        }
-    }
-
-    // Resolve the new root set through the real resolver (transitive closure,
-    // version floor, conflict + audit). `manifests` is retained (real jar
-    // requires/provided) for the reverse-dependency attribution below.
-    let (entries, resolve_issues) = resolve_pack_with_state(
-        mr,
-        &new_roots,
-        &inst.mc_version,
-        &inst.loader,
-        vcache,
-        scache,
-        scanned,
-        provided,
-        manifests,
-    )
-    .await
-    .map_err(|e| EditError::Resolve(e.to_string()))?;
-
-    // ModEntry has only a path; PinnedMod carries a name. One pretty form for
-    // every diff label so add/pulled (from path) and removed/pruned (from the
-    // stored name) read consistently.
-    let pretty = |s: &str| -> String {
-        s.strip_prefix("mods/")
-            .unwrap_or(s)
-            .trim_end_matches(".jar")
-            .to_string()
+            })
+            .cloned()
     };
 
-    // --- Gate 1: a removal that re-appears is still required ---------------
-    let mut still: Vec<StillRequired> = Vec::new();
-    for rp in remove {
-        let Some(culprit) = entries.iter().find(|e| &e.project_id == rp)
-        else {
-            continue; // genuinely gone — good
+    let mut added: Vec<String> = Vec::new();
+    let mut pulled_deps: Vec<String> = Vec::new();
+    let mut dep_queue: VecDeque<String> = VecDeque::new();
+
+    // --- explicit adds (each: ONE targeted, session-cached fetch) ---------
+    for a in add {
+        if a.project_id.is_empty() {
+            continue;
+        }
+        let versions = match cached_versions(mr, vcache, &a.project_id).await {
+            Ok(v) => v.clone(),
+            Err(e) => {
+                return Err(EditError::Resolve(format!(
+                    "{}: {e}",
+                    a.project_id
+                )))
+            }
         };
-        // Modids the removed project provides (from its real jar manifest).
-        let provided_ids: Vec<String> = manifests
-            .get(rp)
-            .map(|m| m.provided.iter().map(|(modid, _)| modid.clone()).collect())
-            .unwrap_or_default();
-        // Any kept mod whose jar manifest still requires one of those modids.
-        let mut required_by: Vec<String> = Vec::new();
-        if !provided_ids.is_empty() {
-            for e in &entries {
-                if &e.project_id == rp {
-                    continue;
+        let chosen = if !a.version_id.is_empty() {
+            versions.iter().find(|v| v.id == a.version_id).cloned()
+        } else {
+            pick_compatible(&versions)
+        };
+        let Some(v) = chosen else {
+            return Err(EditError::Resolve(format!(
+                "no {} version of {} for Minecraft {} {}",
+                if a.version_id.is_empty() {
+                    "compatible".to_string()
+                } else {
+                    format!("version id {}", a.version_id)
+                },
+                a.project_id,
+                inst.mc_version,
+                inst.loader
+            )));
+        };
+        let (cs, ss) = cached_sides(mr, scache, &a.project_id).await;
+        let Some(rv) = to_resolved(&v, &cs, &ss) else {
+            return Err(EditError::Resolve(format!(
+                "{} {} has no downloadable file",
+                a.project_id, v.id
+            )));
+        };
+        for d in &v.dependencies {
+            if d.dependency_type == "required" {
+                if let Some(dp) = d.project_id.clone() {
+                    dep_queue.push_back(dp);
                 }
-                if let Some(man) = manifests.get(&e.project_id) {
-                    if man.requires.iter().any(|(modid, _)| {
-                        provided_ids.iter().any(|p| p == modid)
-                    }) {
-                        required_by.push(pretty(&e.path));
+            }
+        }
+        // CANONICAL id from the fetched version — `a.project_id` may be a
+        // slug; the instance keys on canonical ids. Using the slug here was
+        // why a repin failed to find the existing entry and duplicated /
+        // no-op'd instead of replacing it.
+        let canon = v.project_id.clone();
+        let entry = rv.to_entry();
+        if let Some(slot) =
+            entries.iter_mut().find(|e| e.project_id == canon)
+        {
+            *slot = entry; // repin in place
+        } else {
+            entries.push(entry);
+            added.push(canon.clone());
+        }
+        present.insert(canon.clone());
+        if !roots.iter().any(|r| r == &canon) {
+            roots.push(canon);
+        }
+    }
+
+    // --- transitive MISSING-only dependency walk --------------------------
+    // Skips anything already present (no fetch, no repin → fabric-api &
+    // friends stay frozen); recurses only into the genuinely-missing subtree.
+    while let Some(pid) = dep_queue.pop_front() {
+        if pid.is_empty() || present.contains(&pid) {
+            continue;
+        }
+        present.insert(pid.clone()); // mark first → no refetch loop
+        let versions = match cached_versions(mr, vcache, &pid).await {
+            Ok(v) => v.clone(),
+            Err(e) => {
+                return Err(EditError::Resolve(format!(
+                    "dependency {pid}: {e}"
+                )))
+            }
+        };
+        let Some(v) = pick_compatible(&versions) else {
+            // No compatible version of a required dep — let the boot report
+            // it ("requires X which is missing"); do not hard-fail the edit.
+            continue;
+        };
+        let (cs, ss) = cached_sides(mr, scache, &pid).await;
+        if let Some(rv) = to_resolved(&v, &cs, &ss) {
+            for d in &v.dependencies {
+                if d.dependency_type == "required" {
+                    if let Some(dp) = d.project_id.clone() {
+                        dep_queue.push_back(dp);
                     }
                 }
             }
-        }
-        required_by.sort();
-        required_by.dedup();
-        still.push(StillRequired {
-            label: pretty(&culprit.path),
-            required_by,
-        });
-    }
-    if !still.is_empty() {
-        return Err(EditError::StillRequired(still));
-    }
-
-    // --- Gate 2: blocking validation issues -------------------------------
-    // Gate on the SAME combined view assemble_pack/validate_pack use: the
-    // resolver's dep-level issues PLUS per-entry validate_pack checks
-    // (game-version / loader / side / dup / insecure). Without the combine an
-    // added mod incompatible with the pack's MC version would slip the gate.
-    // Mirror assemble_pack: everything blocks except the purely-informational
-    // IncompatibleAddonDropped (its conflicting addon was already removed).
-    let issues = combined_issues(
-        &entries,
-        resolve_issues,
-        &inst.mc_version,
-        &inst.loader,
-    );
-    let blocking: Vec<pack::ValidationIssue> = issues
-        .into_iter()
-        .filter(|i| {
-            !matches!(
-                i,
-                pack::ValidationIssue::IncompatibleAddonDropped { .. }
-            )
-        })
-        .collect();
-    if !blocking.is_empty() {
-        return Err(EditError::Conflicts(blocking));
-    }
-
-    // --- Build the diff + pinned closure ----------------------------------
-    let old: HashSet<&str> =
-        inst.mods.iter().map(|m| m.project_id.as_str()).collect();
-    let new_pids: HashSet<&str> =
-        entries.iter().map(|e| e.project_id.as_str()).collect();
-    let root_pids: HashSet<&str> =
-        new_roots.iter().map(|r| r.project_id.as_str()).collect();
-
-    let mut added = Vec::new();
-    let mut pulled_deps = Vec::new();
-    for e in &entries {
-        if !old.contains(e.project_id.as_str()) {
-            if root_pids.contains(e.project_id.as_str()) {
-                added.push(pretty(&e.path));
-            } else {
-                pulled_deps.push(pretty(&e.path));
-            }
-        }
-    }
-    let mut removed = Vec::new();
-    let mut pruned_orphans = Vec::new();
-    for m in &inst.mods {
-        if !new_pids.contains(m.project_id.as_str()) {
-            if remove_set.contains(m.project_id.as_str()) {
-                removed.push(pretty(&m.name));
-            } else {
-                pruned_orphans.push(pretty(&m.name));
-            }
+            entries.push(rv.to_entry());
+            pulled_deps.push(pid.clone());
         }
     }
 
-    // noop: resolved closure (project_id+version_id multiset) AND root set
-    // unchanged. Caller skips every write (no needless registry re-dump).
+    // noop: identical (project_id, version_id) multiset AND identical roots.
     let same_closure = {
         let mut a: Vec<(&str, &str)> = inst
             .mods
@@ -2424,25 +2416,21 @@ async fn edit_instance_mods_with_state(
         b.sort();
         a == b
     };
-    let new_root_ids: Vec<String> =
-        new_roots.iter().map(|r| r.project_id.clone()).collect();
-    let old_root_ids: HashSet<&str> = if inst.roots.is_empty() {
+    let old_roots: HashSet<&str> = if inst.roots.is_empty() {
         inst.mods.iter().map(|m| m.project_id.as_str()).collect()
     } else {
         inst.roots.iter().map(String::as_str).collect()
     };
-    let same_roots = new_root_ids.len() == old_root_ids.len()
-        && new_root_ids
-            .iter()
-            .all(|p| old_root_ids.contains(p.as_str()));
+    let same_roots = roots.len() == old_roots.len()
+        && roots.iter().all(|p| old_roots.contains(p.as_str()));
 
     Ok(EditResult {
         entries,
-        roots: new_root_ids,
+        roots,
         added,
         pulled_deps,
         removed,
-        pruned_orphans,
+        pruned_orphans: Vec::new(),
         noop: same_closure && same_roots,
     })
 }
@@ -3031,28 +3019,6 @@ async fn tool_propose_pack(
     }))?)
 }
 
-async fn tool_validate_pack(
-    mr: &Modrinth,
-    input: &Value,
-    tx: &UnboundedSender<CuratorEvent>,
-) -> anyhow::Result<String> {
-    let mc_version = str_field(input, "mc_version")?;
-    let loader = str_field(input, "loader")?;
-    let refs = parse_mod_refs(input)?;
-
-    tool_chip(tx, "validate_pack", "validating");
-
-    // Resolve the full transitive closure FIRST so the required libraries the
-    // model omitted are auto-included; only genuinely unsatisfiable deps (or
-    // present incompatibles) are reported back as issues to fix.
-    let (entries, dep_issues) =
-        pump(resolve_pack(mr, &refs, mc_version, loader), tx, "validate_pack").await?;
-    let issues = combined_issues(&entries, dep_issues, mc_version, loader);
-
-    tool_chip(tx, "validate_pack", "done");
-    Ok(serde_json::to_string(&issues)?)
-}
-
 /// Fire the Slice-1.5 registry-dump pass for `id` in a detached task. Shared
 /// by `assemble_pack` and `edit_pack` so the grounding cache
 /// (`<instance>/anvil-registry.json`) is refreshed whenever the pinned mod set
@@ -3131,6 +3097,439 @@ pub(crate) fn reconcile_dump_into_cache(
         }
     }
     let _ = std::fs::remove_dir_all(instance_dir(id).join(".anvil-dump"));
+}
+
+/// Last `n` chars of `s` on a char boundary (a crash/diagnosis lives at the
+/// END of a boot log — the exception chain, not the banner).
+fn tail_chars(s: &str, n: usize) -> &str {
+    if s.len() <= n {
+        return s;
+    }
+    let mut start = s.len() - n;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    &s[start..]
+}
+
+/// The ordered, in-place repair contract appended to every `Blocked` verdict
+/// so Stage R (mod-resolution) and Stage W (world-gen crash) hand the curator
+/// the SAME actionable recovery: repin → add-dep → (last resort) remove, all
+/// via edit_pack on THIS instance — no from-scratch reassemble, no asking.
+fn repair_contract(instance_id: &str) -> String {
+    format!(
+        "\n\nHOW TO FIX — do this now with edit_pack on instance \
+         \"{id}\" (allowed in this phase; do NOT ask permission for a repin \
+         or dep-add, do NOT narrate around this, do NOT reassemble from \
+         scratch). Try in THIS order, re-running verify_pack after each:\n\
+         1. REPIN the named dependency to the required floor:\n\
+         \x20  edit_pack {{\"instance_id\":\"{id}\",\"add\":[{{\"project_id\":\
+         \"<dep id above>\",\"version_req\":\"<the >= range above>\"}}]}}\n\
+         2. If the message says a dependency is MISSING, add it the same way \
+         (project_id + version_req).\n\
+         3. LAST RESORT ONLY, after a repin/add genuinely cannot satisfy it: \
+         remove the offending mod —\n\
+         \x20  edit_pack {{\"instance_id\":\"{id}\",\"remove\":[\"<mod id>\"]}}\n\
+         Do NOT downgrade the dependent mods (that is what Fabric's per-mod \
+         hints wrongly suggest). You physically cannot write quests or origins \
+         until a verify_pack boot actually passes — keep repairing and \
+         re-verifying until it does or you are told the budget is exhausted.",
+        id = instance_id
+    )
+}
+
+// --- Per-stage verify budget ------------------------------------------------
+// Verification is two stages (client smoke, then headless world-gen). Each
+// gets STAGE_BUDGET autonomous repair attempts; exceeding it is NOT silent —
+// it ESCALATES to a player decision (alternative vs delete) and sets a
+// structural `awaiting` flag so every `assembled` tool refuses until the
+// player answers (the model cannot narrate past a missing tool). Counters
+// live in a sidecar (transient; survives the mod_set_key change every repin
+// causes); a clean stage pass / fast-path resets the campaign.
+const STAGE_BUDGET: u32 = 2;
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct RepairState {
+    #[serde(default)]
+    stage1: u32,
+    #[serde(default)]
+    stage2: u32,
+    /// Set when a stage escalates: the player must choose alternative-vs-
+    /// delete. While Some, the `assembled` tools refuse — a structural pause.
+    #[serde(default)]
+    awaiting: Option<String>,
+}
+
+fn repair_state_path(id: &str) -> std::path::PathBuf {
+    instance_dir(id).join(".repair-state")
+}
+fn load_repair_state(id: &str) -> RepairState {
+    std::fs::read_to_string(repair_state_path(id))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+fn save_repair_state(id: &str, st: &RepairState) {
+    let _ = std::fs::create_dir_all(instance_dir(id));
+    if let Ok(j) = serde_json::to_string(st) {
+        let _ = std::fs::write(repair_state_path(id), j);
+    }
+}
+/// A clean verification (or fast-path) wipes the whole campaign.
+fn reset_repair_state(id: &str) {
+    let _ = std::fs::remove_file(repair_state_path(id));
+}
+fn bump_stage(id: &str, stage: u8) -> u32 {
+    let mut st = load_repair_state(id);
+    let n = if stage == 1 {
+        st.stage1 += 1;
+        st.stage1
+    } else {
+        st.stage2 += 1;
+        st.stage2
+    };
+    save_repair_state(id, &st);
+    n
+}
+/// Stage 1 passed — clear ITS counter so a later Stage-1 regression (after a
+/// Stage-2 repair churned the pack) starts fresh, not pre-escalated.
+fn reset_stage1(id: &str) {
+    let mut st = load_repair_state(id);
+    if st.stage1 != 0 {
+        st.stage1 = 0;
+        save_repair_state(id, &st);
+    }
+}
+/// The structural pause: while Some, every `assembled` tool refuses with this
+/// message until the player's next turn clears it (see `run_turn`).
+fn awaiting_decision(id: &str) -> Option<String> {
+    load_repair_state(id).awaiting
+}
+fn set_awaiting(id: &str, msg: &str) {
+    let mut st = load_repair_state(id);
+    st.awaiting = Some(msg.to_string());
+    save_repair_state(id, &st);
+}
+fn clear_awaiting(id: &str) {
+    let mut st = load_repair_state(id);
+    if st.awaiting.is_some() {
+        st.awaiting = None;
+        save_repair_state(id, &st);
+    }
+}
+
+/// Forward `LaunchEvent::Status` from a boot into curator chips (keeps the
+/// SSE stream warm during a ~2-min boot). Returns the launch-event sender.
+fn spawn_launch_chip_forward(
+    tx: &UnboundedSender<CuratorEvent>,
+    name: &'static str,
+) -> tokio::sync::mpsc::UnboundedSender<crate::launch::LaunchEvent> {
+    let (ltx, mut lrx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::launch::LaunchEvent>();
+    let tx2 = tx.clone();
+    tokio::spawn(async move {
+        while let Some(ev) = lrx.recv().await {
+            if let crate::launch::LaunchEvent::Status(s) = ev {
+                tool_chip(&tx2, name, &s);
+            }
+        }
+    });
+    ltx
+}
+
+/// Turn a real boot log into a curator-actionable diagnosis: the crash
+/// analyst if a key is set, else the raw log tail with an explicit
+/// "read this, do NOT speculate" instruction. Never a contentless message.
+async fn analyze_or_log(log: &str, mods: &[String], fallback: &str) -> String {
+    match crate::settings::anthropic_key() {
+        Some(k) => analyze_crash(&k, log, mods).await.unwrap_or_else(|e| {
+            format!(
+                "{fallback}\nRead the actual log below and fix the specific \
+                 error — do NOT speculate:\n{}\n(analysis unavailable: {e})",
+                tail_chars(log, 5000)
+            )
+        }),
+        None => format!(
+            "{fallback}\nRead the actual log below and fix the specific \
+             error it shows — do NOT speculate about likely culprits:\n{}",
+            tail_chars(log, 6000)
+        ),
+    }
+}
+
+/// Stage-1 (client smoke) diagnosis. A mod-RESOLUTION reject (Fabric refuses
+/// to start: "incompatible / missing mods") prints its OWN machine-parseable
+/// remediation in the CLIENT log too — the exact same block Stage 2 already
+/// parses deterministically. Use `parse_fabric_remediation` on that class so
+/// the curator gets the root-cause repin set verbatim (no LLM analyst
+/// round-trip on data the loader already structured for us). Only a genuine
+/// runtime/mixin/entrypoint failure (no parseable remediation) falls through
+/// to the LLM analyst.
+async fn stage1_core(
+    id: &str,
+    reason: &str,
+    mod_name: Option<&str>,
+    mods: &[String],
+) -> String {
+    let head = format!(
+        "Client smoke failed: {}{reason}",
+        mod_name.map(|m| format!("[{m}] ")).unwrap_or_default()
+    );
+    let Some(l) = std::fs::read_to_string(
+        instance_dir(id).join("logs").join("latest.log"),
+    )
+    .ok()
+    .filter(|s| s.trim().len() > 40) else {
+        return head;
+    };
+    // Mirror Stage 2: deterministic parser on the resolution-reject class.
+    if crate::launch::is_resolution_reject(reason) {
+        if let Some(rem) = crate::launch::parse_fabric_remediation(&l) {
+            return rem.summary;
+        }
+    }
+    analyze_or_log(&l, mods, &head).await
+}
+
+/// Map a failed stage to a verdict. Under budget → Blocked + repair contract
+/// (autonomous repair continues). At/over budget → Escalate: set the
+/// structural `awaiting` pause and ask the player alternative-vs-delete (the
+/// model cannot proceed because the assembled tools then refuse).
+fn stage_verdict(
+    id: &str,
+    stage_label: &str,
+    stage: u8,
+    core: String,
+    culprit: Option<&str>,
+) -> GateVerdict {
+    let n = bump_stage(id, stage);
+    let who = culprit
+        .map(|c| format!("'{c}'"))
+        .unwrap_or_else(|| "the offending mod".to_string());
+    if n >= STAGE_BUDGET {
+        let msg = format!(
+            "{stage_label} STILL fails after {n} autonomous repair attempts. \
+             Stop auto-repairing and DECIDE WITH THE PLAYER — present exactly \
+             these two options and ask which they want, do NOT pick:\n\
+             \x20 (A) swap {who} for an alternative (use search_mods to find \
+             a fitting replacement, then edit_pack add+remove)\n\
+             \x20 (B) remove {who}\n\
+             After they answer, do that, then verify again.\n\n{core}"
+        );
+        set_awaiting(id, &msg);
+        GateVerdict::Escalate(msg)
+    } else {
+        GateVerdict::Blocked(format!(
+            "{stage_label} failed (attempt {n}/{STAGE_BUDGET}). Repair \
+             autonomously and re-verify.\n\n{core}{}",
+            repair_contract(id)
+        ))
+    }
+}
+
+/// Outcome of the authoritative pre-quest world-gen gate.
+pub(crate) enum GateVerdict {
+    /// The pack booted a server that generated a world cleanly AND the real
+    /// runtime registry is reconciled into the cache. Safe to design quests.
+    Verified,
+    /// We could not run the boot (offline / non-Fabric / helper unavailable).
+    /// Proceed, but the registry is the (hardened) static scan — surface the
+    /// caveat so neither the model nor the player assumes it was verified.
+    Unverified(String),
+    /// A stage failed under budget — autonomous repair continues. The message
+    /// is the real log-grounded diagnosis + the repair contract.
+    Blocked(String),
+    /// A stage exhausted its ≤2 budget. A structural `awaiting` pause is set
+    /// (the assembled tools now refuse); the curator must relay the
+    /// alternative-vs-delete choice to the player and STOP.
+    Escalate(String),
+}
+
+/// Authoritative world-gen gate, shared by `verify_pack` and the pre-quest
+/// transition. The headless dedicated-server `/dump registry` boot only
+/// prints its ready line AFTER it has generated and ticked the spawn region,
+/// so it exercises WORLD CREATION (the class `smoke_test`'s title-screen
+/// client boot is structurally blind to) AND yields the real runtime
+/// registry. Idempotent: a `DumpReconciled` cache for the CURRENT pins is the
+/// fast path (the detached background pass usually already did this), so
+/// calling it at the top of every `generate_quests` batch is cheap.
+pub(crate) async fn world_gen_gate(
+    inst: &Instance,
+    mr: &Modrinth,
+    tx: &UnboundedSender<CuratorEvent>,
+) -> GateVerdict {
+    // Fast path: already booted+reconciled for these exact pins.
+    let cache = instance_dir(&inst.id).join("anvil-registry.json");
+    let key = crate::registry::mod_set_key(inst);
+    if let Ok(txt) = std::fs::read_to_string(&cache) {
+        if let Ok(c) =
+            serde_json::from_str::<crate::registry::ScanResult>(&txt)
+        {
+            if c.mod_set_key == key
+                && c.source == crate::registry::ScanSource::DumpReconciled
+            {
+                reset_repair_state(&inst.id);
+                // The verify pipeline passing IS the assembled→progression
+                // edge — without this the thread is stuck in `assembled`
+                // forever and the quest/origin tools never become available.
+                let _ =
+                    tx.send(CuratorEvent::Phase("progression".to_string()));
+                return GateVerdict::Verified;
+            }
+        }
+    }
+
+    let mods: Vec<String> =
+        inst.mods.iter().map(|m| m.name.clone()).collect();
+
+    // ---- Stage 1: client smoke (real client, pre-window, NO window) ------
+    // Catches resolution + mod-init incompatibilities INCLUDING client-only
+    // mods (a dedicated server disables those entrypoints, so Stage 2 is
+    // STRUCTURALLY blind to that whole crash class). Stage 1 is therefore
+    // MANDATORY: if it cannot run we must NOT silently fall through to a
+    // Stage-2-only boot + autonomous repair loop — that makes the curator
+    // chase server-only failures the player never hits (the owo-lib/MCA
+    // ghost-chase). Instead return `Unverified` (honest "couldn't fully
+    // check", does NOT drive the repair loop) with a sign-in caveat.
+    let acct = match crate::auth::load_account() {
+        Some(a) => a,
+        None => {
+            return GateVerdict::Unverified(
+                "the client smoke needs Microsoft sign-in (Instances tab); \
+                 sign in and re-verify for a full check (a server-only boot \
+                 would miss client-side crashes)"
+                    .to_string(),
+            );
+        }
+    };
+    let cid = crate::settings::ms_client_id();
+    let acct = match crate::auth::ensure_fresh(&cid, acct).await {
+        Ok(a) => {
+            let _ = crate::auth::save_account(&a);
+            a
+        }
+        Err(e) => {
+            return GateVerdict::Unverified(format!(
+                "couldn't refresh your Microsoft session ({e}); sign in \
+                 again and re-verify — the client smoke is required for a \
+                 full check (a server-only boot misses client-side crashes)"
+            ));
+        }
+    };
+    tool_chip(tx, "verify_pack", "stage 1: client smoke (~1 min, no window)");
+    let ltx = spawn_launch_chip_forward(tx, "verify_pack");
+    match crate::launch::smoke_test(inst, &acct, None, ltx).await {
+        Ok(crate::launch::SmokeVerdict::Ok) => {
+            // Stage 1 passed — clear its counter so a later Stage-1
+            // regression starts fresh; fall through to Stage 2.
+            reset_stage1(&inst.id);
+        }
+        Ok(crate::launch::SmokeVerdict::Failed { mod_name, reason }) => {
+            let core =
+                stage1_core(&inst.id, &reason, mod_name.as_deref(), &mods)
+                    .await;
+            return stage_verdict(
+                &inst.id,
+                "Stage 1 (client smoke)",
+                1,
+                core,
+                mod_name.as_deref(),
+            );
+        }
+        Ok(crate::launch::SmokeVerdict::Inconclusive { reason }) => {
+            // The smoke RAN to a non-crash timeout (weak-positive: it got
+            // far without crashing). Distinct from "could not run" — Stage 2
+            // still adds world-gen + registry-grounding value here.
+            let _ = tx.send(CuratorEvent::Text(format!(
+                "\n_(Client smoke inconclusive ({reason}) — running \
+                 world-gen verification.)_\n"
+            )));
+        }
+        Err(e) => {
+            // The client smoke could not run at all (JVM spawn, etc.) —
+            // same as the auth case: don't ghost-chase a server-only boot.
+            return GateVerdict::Unverified(format!(
+                "the client smoke could not run ({e:#}); re-verify — it is \
+                 required for a full check (a server-only boot misses \
+                 client-side crashes)"
+            ));
+        }
+    }
+
+    // ---- Stage 2: headless world-gen (dedicated server, NO window) -------
+    // wait_for_jvm = true: queue behind any other JVM rather than skipping
+    // the only world-creation verification.
+    tool_chip(
+        tx,
+        "verify_pack",
+        "stage 2: world creation (~1-2 min, no window)",
+    );
+    let ltx = spawn_launch_chip_forward(tx, "verify_pack");
+    match crate::launch::registry_dump_pass(inst, mr, true, ltx).await {
+        Ok(crate::launch::DumpOutcome::Dumped(dir)) => {
+            reconcile_dump_into_cache(inst, &inst.id, &dir);
+            reset_repair_state(&inst.id);
+            // assembled→progression edge (see fast-path note).
+            let _ = tx.send(CuratorEvent::Phase("progression".to_string()));
+            GateVerdict::Verified
+        }
+        Ok(crate::launch::DumpOutcome::Crashed { mod_name, reason }) => {
+            // Stage R (mod resolution): the deterministic Fabric-remediation
+            // parser already produced the root-cause repins — more reliable
+            // than an LLM read, use verbatim. Stage W (runtime/world-gen):
+            // analyze_crash on the real crash report.
+            let stage_r = reason.starts_with("Mod resolution failed")
+                || reason.starts_with("Pack failed mod resolution");
+            let core = if stage_r {
+                reason
+            } else {
+                let crash = newest_crash_report(&inst.id)
+                    .unwrap_or_else(|| reason.clone());
+                analyze_or_log(&crash, &mods, &reason).await
+            };
+            stage_verdict(
+                &inst.id,
+                "Stage 2 (world creation)",
+                2,
+                core,
+                mod_name.as_deref(),
+            )
+        }
+        Ok(crate::launch::DumpOutcome::Failed(why)) => {
+            // No classified crash (mod clash / mixin / embedded-dep the
+            // parser doesn't match): feed the REAL server log to the
+            // analyst — never a contentless "didn't complete" → speculation.
+            let evidence = std::fs::read_to_string(
+                instance_dir(&inst.id)
+                    .join(".anvil-dump")
+                    .join("logs")
+                    .join("latest.log"),
+            )
+            .ok()
+            .filter(|s| s.trim().len() > 40)
+            .or_else(|| newest_crash_report(&inst.id));
+            let core = match evidence {
+                Some(log) => analyze_or_log(&log, &mods, &why).await,
+                None => format!(
+                    "The boot did not complete: {why}. No boot log was \
+                     captured. This is NOT a confirmation the pack works."
+                ),
+            };
+            stage_verdict(
+                &inst.id,
+                "Stage 2 (world creation)",
+                2,
+                core,
+                None,
+            )
+        }
+        Ok(crate::launch::DumpOutcome::EnvUnavailable(why)) => {
+            GateVerdict::Unverified(why)
+        }
+        Err(e) => GateVerdict::Unverified(format!(
+            "verification boot could not run: {e:#}"
+        )),
+    }
 }
 
 async fn tool_assemble_pack(
@@ -3222,17 +3621,25 @@ async fn tool_assemble_pack(
     // `IncompatibleAddonDropped` is INFORMATIONAL — the offending leaf addon
     // was already removed by the exact-pin audit, so the pack is valid; report
     // it but do NOT block on it.
-    let issues = combined_issues(&entries, dep_issues, &mc_version, &loader);
-    let (dropped, blocking): (Vec<_>, Vec<_>) = issues.iter().cloned().partition(|i| {
-        matches!(i, pack::ValidationIssue::IncompatibleAddonDropped { .. })
-    });
-    if !blocking.is_empty() {
-        tool_chip(tx, "assemble_pack", "blocked: validation failed");
-        return Ok(format!(
-            "Refusing to assemble: validate_pack reported issues. Fix these and retry:\n{}",
-            serde_json::to_string(&blocking)?
-        ));
-    }
+    // NO static refusal. The old "Refusing to assemble" gate was the same
+    // fragile, false-positive-prone static check as edit_pack's removed
+    // Layer 1 (e.g. a pre-release version-string artifact dead-ending a whole
+    // build). The pack is still resolved + auto-repinned (construction — keeps
+    // it dependency-complete so the verify loop doesn't grind one missing lib
+    // at a time); whether it actually works is decided by the verify boot in
+    // `assembled`, the sole authority. Only the informational
+    // IncompatibleAddonDropped (a deterministic safe auto-drop already
+    // applied) is surfaced to the player.
+    let dropped: Vec<_> =
+        combined_issues(&entries, dep_issues, &mc_version, &loader)
+            .into_iter()
+            .filter(|i| {
+                matches!(
+                    i,
+                    pack::ValidationIssue::IncompatibleAddonDropped { .. }
+                )
+            })
+            .collect();
     if !dropped.is_empty() {
         tool_chip(
             tx,
@@ -3278,6 +3685,8 @@ async fn tool_assemble_pack(
             sha512: e.sha512.clone(),
             download_url: e.downloads.first().cloned().unwrap_or_default(),
             file_size: e.file_size,
+            client_side: e.client_side.clone(),
+            server_side: e.server_side.clone(),
         })
         .collect();
 
@@ -3321,20 +3730,6 @@ async fn tool_assemble_pack(
         crate::chat::clear_candidate(tid);
     }
 
-    // Slice 1.5 registry-dump trigger (detached, best-effort). Shared with
-    // edit_pack so the grounding cache is refreshed whenever the pinned mod
-    // set changes — see `spawn_registry_dump_detached`.
-    spawn_registry_dump_detached(id.clone(), inst.clone(), mr.clone());
-
-    // Emit the chip before the success string so the UI shows the assembled
-    // pack even while the assistant's wrap-up text is still streaming.
-    let _ = tx.send(CuratorEvent::Assembled {
-        instance_id: id.clone(),
-        name: name.clone(),
-    });
-    let _ = tx.send(CuratorEvent::Phase("assembled".to_string()));
-    tool_chip(tx, "assemble_pack", "done");
-
     let dropped_note = if dropped.is_empty() {
         String::new()
     } else {
@@ -3346,11 +3741,29 @@ async fn tool_assemble_pack(
             serde_json::to_string(&dropped).unwrap_or_default()
         )
     };
+    // assemble_pack is a fast PURE builder: write the instance and land in
+    // the `assembled` state. It does NOT boot/verify (that is the separate
+    // verify_pack pipeline, which only runs IN `assembled`). Verify-before-
+    // quests is enforced structurally by the state machine — quest/origin
+    // tools do not exist in `assembled`, and the only path to `progression`
+    // is the verify pipeline passing — so there is nothing here to fake.
+    let _ = tx.send(CuratorEvent::Assembled {
+        instance_id: id.clone(),
+        name: name.clone(),
+    });
+    let _ = tx.send(CuratorEvent::Phase("assembled".to_string()));
+    tool_chip(tx, "assemble_pack", "done");
     Ok(format!(
-        "Assembled \"{name}\" ({} mods) for Minecraft {mc_version} on {loader} {loader_version}. \
-         Instance id {id}; .mrpack written to {}.{dropped_note}",
-        entries.len(),
-        mrpack_path.display()
+        "Assembled {name} ({n} mods) for Minecraft {mc_version} on {loader} \
+         {loader_version}. Instance id {id}; .mrpack at {mrpack}.{dropped_note}\
+         \n\nThe pack is assembled but NOT yet verified to boot. Your next \
+         tool call is verify_pack with instance_id \"{id}\" — do not present a \
+         final breakdown or ask about quests/origins until it passes (quests \
+         literally cannot be built until the pack verifies). If verify_pack \
+         returns BLOCKED, repair with edit_pack and re-verify; if it ESCALATES \
+         to a player decision, relay the choice and stop.",
+        n = entries.len(),
+        mrpack = mrpack_path.display()
     ))
 }
 
@@ -3458,6 +3871,7 @@ async fn tool_seed_from_pack(
 /// a failed proposal returns structured `{kind,where,why,hint}` issues rather
 /// than erroring. A single authored set per pack (REPLACES on re-call).
 async fn tool_generate_origins(
+    mr: &Modrinth,
     thread_id: Option<&str>,
     input: &Value,
     tx: &UnboundedSender<CuratorEvent>,
@@ -3488,6 +3902,33 @@ async fn tool_generate_origins(
         ));
     };
 
+    // Same authoritative world-gen gate as generate_quests (idempotent —
+    // normally the DumpReconciled fast-path since quests ran first).
+    let gate_caveat = match world_gen_gate(&inst, mr, tx).await {
+        GateVerdict::Verified => String::new(),
+        GateVerdict::Unverified(why) => format!(
+            "NOTE: pack UNVERIFIED ({why}) — origin ids grounded on the \
+             static scan; tell the player. "
+        ),
+        GateVerdict::Blocked(detail) => {
+            tool_chip(tx, "generate_origins", "blocked: pack fails to boot");
+            return Ok(format!(
+                "BLOCKED: cannot author origins for a pack that does not \
+                 create a world. Nothing written.\n{detail}\nRelay to the \
+                 player and ASK; if approved, edit_pack out the culprit then \
+                 call generate_origins again."
+            ));
+        }
+        GateVerdict::Escalate(msg) => {
+            tool_chip(tx, "generate_origins", "blocked: needs player decision");
+            return Ok(format!(
+                "BLOCKED: the pack does not boot and autonomous repair is \
+                 exhausted. Nothing written. Relay this to the player and \
+                 STOP — wait for their A/B choice:\n{msg}"
+            ));
+        }
+    };
+
     // Gate: Origins core + Open Loader (the datapack lives under
     // config/openloader/data and its powers are Apoli powers core registers).
     let has_core = inst
@@ -3510,9 +3951,9 @@ async fn tool_generate_origins(
     if !has_open_loader {
         return Ok(format!(
             "generate_origins: instance {instance_id} has Origins but not Open Loader, so the \
-             origins datapack (config/openloader/data/...) would never load. Recover: search_mods \
-             for \"open-loader\", add it (1.20.1 fabric), validate_pack then assemble_pack again \
-             with the SAME pack name, then call generate_origins again."
+             origins datapack (config/openloader/data/...) would never load. Recover: add it in \
+             place with edit_pack (project \"open-loader\", 1.20.1 fabric), re-verify, then call \
+             generate_origins again."
         ));
     }
 
@@ -3544,7 +3985,7 @@ async fn tool_generate_origins(
     let s = validated.get();
     tool_chip(tx, "generate_origins", "done");
     Ok(format!(
-        "generate_origins: wrote {} custom origin(s) and {} power file(s) to instance \
+        "{gate_caveat}generate_origins: wrote {} custom origin(s) and {} power file(s) to instance \
          {instance_id}. The Origins datapack is valid and fully replaces any prior set. \
          Do not call generate_origins again unless revising the whole set.",
         s.origins.len(),
@@ -3616,6 +4057,8 @@ pub(crate) fn apply_edit_writes(
             sha512: e.sha512.clone(),
             download_url: e.downloads.first().cloned().unwrap_or_default(),
             file_size: e.file_size,
+            client_side: e.client_side.clone(),
+            server_side: e.server_side.clone(),
         })
         .collect();
     updated.roots = result.roots.clone();
@@ -3642,7 +4085,61 @@ pub(crate) fn apply_edit_writes(
 /// `tool_generate_origins`: parse → find instance → safe core → on failure a
 /// RECOVERABLE `Ok(string)` (the run_turn round loop is the repair loop) → on
 /// success do only safe local writes in a fixed order, then re-dump grounding.
+/// Append one observability record per `edit_pack` invocation to
+/// `<instance>/.edit-log.jsonl` (the chat persists only rendered text, so the
+/// actual tool I/O was previously invisible post-hoc — see the Harvest Hollow
+/// "repin never landed" investigation). Best-effort: a logging failure must
+/// never affect the edit itself.
+fn log_edit_io(input: &Value, ok: bool, result: &str) {
+    let path = input
+        .get("instance_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(|id| instance_dir(id).join(".edit-log.jsonl"))
+        .unwrap_or_else(|| {
+            crate::settings::data_dir().join("edit-log.jsonl")
+        });
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let line = serde_json::json!({
+        "ts_ms": ts,
+        "input": input,
+        "ok": ok,
+        "result": result,
+    });
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(mut s) = serde_json::to_string(&line) {
+        s.push('\n');
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = f.write_all(s.as_bytes());
+        }
+    }
+}
+
 async fn tool_edit_pack(
+    mr: &Modrinth,
+    thread_id: Option<&str>,
+    input: &Value,
+    tx: &UnboundedSender<CuratorEvent>,
+) -> anyhow::Result<String> {
+    let r = tool_edit_pack_inner(mr, thread_id, input, tx).await;
+    match &r {
+        Ok(s) => log_edit_io(input, true, s),
+        Err(e) => log_edit_io(input, false, &format!("{e:#}")),
+    }
+    r
+}
+
+async fn tool_edit_pack_inner(
     mr: &Modrinth,
     _thread_id: Option<&str>,
     input: &Value,
@@ -3650,16 +4147,21 @@ async fn tool_edit_pack(
 ) -> anyhow::Result<String> {
     let instance_id = str_field(input, "instance_id")?.to_string();
 
-    // add[]: {project_id, version_id?}. Bad shape => recoverable, not a hard
-    // error (the model fixes it and retries — same contract as generate_origins).
+    // add[]: {project_id, version_id?, version_req?}. Bad shape => recoverable,
+    // not a hard error (the model fixes it and retries — same contract as
+    // generate_origins). `version_req` (e.g. ">=0.92.2+1.20.1") lets the model
+    // act on Fabric's remediation directly: it never has to know a concrete
+    // Modrinth version_id — we resolve the newest satisfying version below.
     let mut add: Vec<ModRef> = Vec::new();
+    let mut add_reqs: Vec<Option<String>> = Vec::new();
     if let Some(arr) = input.get("add").and_then(Value::as_array) {
         for item in arr {
             let Some(pid) = item.get("project_id").and_then(Value::as_str)
             else {
                 return Ok("edit_pack: every `add` entry needs a string \
-                     `project_id` (and an optional `version_id`). Fix and \
-                     call edit_pack again."
+                     `project_id` (plus an optional `version_id` OR \
+                     `version_req` like \">=1.2.3\"). Fix and call edit_pack \
+                     again."
                     .to_string());
             };
             add.push(ModRef {
@@ -3670,6 +4172,12 @@ async fn tool_edit_pack(
                     .unwrap_or("")
                     .to_string(),
             });
+            add_reqs.push(
+                item.get("version_req")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .filter(|s| !s.trim().is_empty()),
+            );
         }
     }
     let remove: Vec<String> = input
@@ -3689,7 +4197,22 @@ async fn tool_edit_pack(
             .to_string());
     }
 
-    let _ = tx.send(CuratorEvent::Phase("assembled".to_string()));
+    // Don't downgrade the phase mid-repair-loop. When a verification/quests
+    // turn calls edit_pack to repair, keep the thread in progression/complete
+    // so the next turn stays scoped to the loop (no propose_pack/search_mods
+    // detour); only a genuine pre-progression edit advances to "assembled".
+    let keep_phase = _thread_id
+        .and_then(crate::chat::load_thread)
+        .map(|t| {
+            matches!(
+                t.phase,
+                crate::chat::Phase::Progression | crate::chat::Phase::Complete
+            )
+        })
+        .unwrap_or(false);
+    if !keep_phase {
+        let _ = tx.send(CuratorEvent::Phase("assembled".to_string()));
+    }
     tool_chip(tx, "edit_pack", "resolving");
 
     let Some(inst) =
@@ -3701,60 +4224,101 @@ async fn tool_edit_pack(
         ));
     };
 
+    // Range-aware add/repin: resolve any `version_req` to the newest Modrinth
+    // version that satisfies it AND runs on this instance's mc/loader, using
+    // the SAME version engine the resolver uses (no LLM version-id guessing).
+    for (i, req) in add_reqs.iter().enumerate() {
+        let Some(req) = req else { continue };
+        if !add[i].version_id.is_empty() {
+            continue; // an explicit version_id always wins over a range
+        }
+        let pid = add[i].project_id.clone();
+        let Some(vreq) = crate::version::VersionReq::parse(req) else {
+            return Ok(format!(
+                "edit_pack: could not parse version_req {req:?} for \
+                 {pid}. Use a Fabric-style range like \">=0.92.2+1.20.1\". \
+                 Nothing was changed."
+            ));
+        };
+        let versions = match mr.versions(&pid).await {
+            Ok(v) => v,
+            Err(e) => {
+                tool_chip(tx, "edit_pack", "blocked: version lookup failed");
+                return Ok(format!(
+                    "edit_pack: could not list versions for {pid} ({e}). \
+                     Usually transient — tell the player and retry shortly. \
+                     Nothing was changed."
+                ));
+            }
+        };
+        let pick = versions
+            .iter()
+            .filter(|v| {
+                to_resolved(v, "required", "required")
+                    .map(|rv| {
+                        pack::version_compatible(
+                            &rv,
+                            &inst.mc_version,
+                            &inst.loader,
+                        )
+                    })
+                    .unwrap_or(false)
+            })
+            .filter_map(|v| {
+                crate::version::Version::parse(&v.version_number)
+                    .filter(|pv| crate::version::satisfies(pv, &vreq))
+                    .map(|pv| (pv, v))
+            })
+            .max_by(|(a, av), (b, bv)| {
+                a.cmp(b).then(av.date_published.cmp(&bv.date_published))
+            })
+            .map(|(_, v)| v);
+        match pick {
+            Some(v) => {
+                tool_chip(
+                    tx,
+                    "edit_pack",
+                    &format!("{pid} {req} → {}", v.version_number),
+                );
+                add[i].version_id = v.id.clone();
+            }
+            None => {
+                tool_chip(tx, "edit_pack", "blocked: no version satisfies");
+                // Plain failure only — the verify gate's stage_verdict owns
+                // escalation (it decides alternative-vs-delete). Echoing
+                // "last resort remove" here would double up with that.
+                return Ok(format!(
+                    "edit_pack: no version of {pid} satisfies {req} on \
+                     Minecraft {} {} — nothing was changed. Try a different \
+                     version range or a different project for this fix.",
+                    inst.mc_version, inst.loader
+                ));
+            }
+        }
+    }
+
     let result = match edit_instance_mods(mr, &inst, &add, &remove).await {
         Ok(r) => r,
         Err(EditError::Resolve(e)) => {
             tool_chip(tx, "edit_pack", "blocked: resolve failed");
             return Ok(format!(
-                "edit_pack: could not resolve the new mod set ({e}). This is \
-                 usually a transient Modrinth/network issue — tell the player \
-                 and try again shortly, or pick a different mod. Nothing was \
+                "edit_pack: could not resolve {e}. The Modrinth client \
+                 already retries with backoff, so a real outage is rare — \
+                 try once more, or pick a different mod/version. Nothing was \
                  changed."
             ));
         }
-        Err(EditError::StillRequired(items)) => {
-            tool_chip(tx, "edit_pack", "blocked: still required");
-            let lines: Vec<String> = items
-                .iter()
-                .map(|s| {
-                    if s.required_by.is_empty() {
-                        format!(
-                            "- {} is still pulled in as a dependency of \
-                             other mods in this pack (jar metadata could not \
-                             name the exact requirer); it cannot be removed \
-                             on its own.",
-                            s.label
-                        )
-                    } else {
-                        format!(
-                            "- {} is still required by: {}. To remove {}, \
-                             also remove those mods in the SAME edit_pack \
-                             call.",
-                            s.label,
-                            s.required_by.join(", "),
-                            s.label
-                        )
-                    }
-                })
-                .collect();
-            return Ok(format!(
-                "edit_pack refused: {} removal(s) would break the pack \
-                 (nothing was changed):\n{}\nEither keep these mods, or call \
-                 edit_pack again also removing the requiring mods.",
-                items.len(),
-                lines.join("\n")
-            ));
-        }
-        Err(EditError::Conflicts(issues)) => {
-            tool_chip(tx, "edit_pack", "blocked: conflicts");
-            return Ok(format!(
-                "edit_pack refused: the requested change introduces {} \
-                 blocking conflict(s) (nothing was changed). Choose a \
-                 compatible mod/version or drop the conflicting add, then \
-                 call edit_pack again:\n{}",
-                issues.len(),
-                serde_json::to_string(&issues)?
-            ));
+        // The targeted-delta resolver does NO static conflict / reverse-dep
+        // analysis (the verify boot is the sole authority), so these are
+        // unreachable — kept only for enum-exhaustiveness.
+        Err(EditError::StillRequired(_))
+        | Err(EditError::Conflicts(_, _)) => {
+            tool_chip(tx, "edit_pack", "blocked");
+            return Ok(
+                "edit_pack: the change could not be applied. Adjust the \
+                 add/remove and try again. Nothing was changed."
+                    .to_string(),
+            );
         }
     };
 
@@ -3808,7 +4372,8 @@ async fn tool_edit_pack(
     Ok(format!(
         "edit_pack: instance {instance_id} now has {} mods ({}). Instance, \
          .mrpack and grounding cache updated. Tell the player exactly what \
-         changed and why — especially any auto-pulled deps or pruned mods.",
+         changed and why, then call verify_pack — it is the authority on \
+         whether the change actually boots.",
         updated.mods.len(),
         if parts.is_empty() {
             "version re-pin".to_string()
@@ -3899,7 +4464,7 @@ pub(crate) async fn apply_pack_edit(
                     .collect(),
             });
         }
-        Err(EditError::Conflicts(issues)) => {
+        Err(EditError::Conflicts(issues, _)) => {
             return Err(ApplyEditError::Conflicts { issues });
         }
         Err(EditError::Resolve(message)) => {
@@ -3931,6 +4496,7 @@ pub(crate) async fn apply_pack_edit(
 }
 
 async fn tool_generate_quests(
+    mr: &Modrinth,
     thread_id: Option<&str>,
     input: &Value,
     tx: &UnboundedSender<CuratorEvent>,
@@ -3985,6 +4551,37 @@ async fn tool_generate_quests(
         ));
     };
 
+    // AUTHORITATIVE PRE-QUEST GATE. Boot a server that generates a world (the
+    // crash class the client smoke is blind to) AND ground on the real
+    // runtime registry. Idempotent (DumpReconciled cache fast-path), so the
+    // per-batch cost is one boot total, not one per call.
+    let gate_caveat = match world_gen_gate(&inst, mr, tx).await {
+        GateVerdict::Verified => String::new(),
+        GateVerdict::Unverified(why) => format!(
+            "NOTE: this pack is UNVERIFIED — the world-creation boot could \
+             not run ({why}); ids are grounded on the static scan and a \
+             world-gen crash would not have been caught. Tell the player \
+             plainly. "
+        ),
+        GateVerdict::Blocked(detail) => {
+            tool_chip(tx, "generate_quests", "blocked: pack fails to boot");
+            return Ok(format!(
+                "BLOCKED: cannot design progression for a pack that does not \
+                 create a world. No quests were written.\n{detail}\nRelay \
+                 this to the player and ASK; if they approve, use edit_pack \
+                 to remove the culprit, then call generate_quests again."
+            ));
+        }
+        GateVerdict::Escalate(msg) => {
+            tool_chip(tx, "generate_quests", "blocked: needs player decision");
+            return Ok(format!(
+                "BLOCKED: the pack does not boot and autonomous repair is \
+                 exhausted. No quests written. Relay this to the player and \
+                 STOP — wait for their A/B choice:\n{msg}"
+            ));
+        }
+    };
+
     // Slice 2: recipes are a quest-node FACET. If ANY node in the MERGED graph
     // carries a `recipes` array, the pack MUST ship Open Loader or the
     // datapack would never load (the same presence-gate pattern as
@@ -4012,9 +4609,8 @@ async fn tool_generate_quests(
             return Ok(format!(
                 "generate_quests: instance {instance_id} has recipe- or content-facet quest \
                  node(s) but does not include Open Loader, so the custom-recipe / provisioned-\
-                 content datapack would never load. Recover: search_mods for \"open-loader\", \
-                 add it to the pack (1.20.1 fabric/forge), call validate_pack then assemble_pack \
-                 again with the SAME pack name to update this instance in place, then call \
+                 content datapack would never load. Recover: add it in place with edit_pack \
+                 (project \"open-loader\", 1.20.1 fabric/forge), re-verify, then call \
                  generate_quests again."
             ));
         }
@@ -4150,11 +4746,11 @@ async fn tool_generate_quests(
     if is_final {
         let _ = tx.send(CuratorEvent::Phase("complete".to_string()));
         Ok(format!(
-            "Questline complete: {quest_count} quests across {chapter_count} chapter(s) written to instance {instance_id}.{warn}"
+            "{gate_caveat}Questline complete: {quest_count} quests across {chapter_count} chapter(s) written to instance {instance_id}.{warn}"
         ))
     } else {
         Ok(format!(
-            "Saved. The questline now has {quest_count} quests across {chapter_count} chapter(s). \
+            "{gate_caveat}Saved. The questline now has {quest_count} quests across {chapter_count} chapter(s). \
              Continue with more generate_quests calls (a few chapters each, in progression order), \
              then make a final call with \"final\": true to run the full quality check.{warn}"
         ))
@@ -4315,11 +4911,12 @@ fn format_analyst(text: &str) -> String {
     let rec = p["recommendation"].as_str().unwrap_or("").trim();
     format!(
         "CRASH ANALYSIS — culprit: {}; class: {}. {} Recommended fix: {}\n\
-         SURFACE-AND-WAIT: tell the player this in plain words and ASK whether \
-         to apply the fix. Do NOT modify the pack unless they say yes. If they \
-         approve removing a mod, call assemble_pack again with the SAME pack \
-         name and the mod list minus that mod, then call verify_pack ONE more \
-         time. Do this at most once — never loop verify/assemble.",
+         Apply this fix in place with edit_pack and re-verify (see the steps \
+         below). Repair autonomously — repin/add first, removal last; do NOT \
+         ask the player's permission for a repin or dep-add, and do NOT \
+         reassemble from scratch. Keep repairing and re-verifying until the \
+         pack boots or you are told the budget is exhausted; report each \
+         change in one short line as you go.",
         if culprit.is_empty() { "unclear" } else { &culprit },
         class,
         one,
@@ -4328,6 +4925,7 @@ fn format_analyst(text: &str) -> String {
 }
 
 async fn tool_verify_pack(
+    mr: &Modrinth,
     input: &Value,
     tx: &UnboundedSender<CuratorEvent>,
 ) -> anyhow::Result<String> {
@@ -4342,71 +4940,41 @@ async fn tool_verify_pack(
             )
         })?;
 
-    // Mod-init does not need a real session (spike-verified); a dummy offline
-    // identity lets verify run before the player has signed in.
-    let account =
-        crate::auth::load_account().unwrap_or_else(crate::auth::offline_account);
-
-    tool_chip(tx, "verify_pack", "booting the pack once (~1 min)");
-    let (ltx, mut lrx) =
-        tokio::sync::mpsc::unbounded_channel::<crate::launch::LaunchEvent>();
-    let tx2 = tx.clone();
-    tokio::spawn(async move {
-        while let Some(ev) = lrx.recv().await {
-            if let crate::launch::LaunchEvent::Status(s) = ev {
-                tool_chip(&tx2, "verify_pack", &s);
-            }
-        }
-    });
-
-    let verdict = crate::launch::smoke_test(&inst, &account, None, ltx)
-        .await
-        .map_err(|e| anyhow!("verify_pack could not boot the pack: {e:#}"))?;
-
-    match verdict {
-        crate::launch::SmokeVerdict::Ok => {
+    // The world-gen server boot — reaches spawn-region generation (the
+    // world-creation crash class the old title-screen client smoke was blind
+    // to) AND captures the real runtime registry.
+    match world_gen_gate(&inst, mr, tx).await {
+        GateVerdict::Verified => {
             tool_chip(tx, "verify_pack", "clean");
-            Ok("VERIFIED: the pack booted and every mod initialized cleanly. \
-                Tell the player the pack is confirmed working."
+            Ok("VERIFIED: the pack booted a server that generated a world \
+                cleanly, and its real runtime registry is now grounded. Tell \
+                the player the pack is confirmed working."
                 .to_string())
         }
-        crate::launch::SmokeVerdict::Inconclusive { reason } => {
+        GateVerdict::Unverified(why) => {
             tool_chip(tx, "verify_pack", "inconclusive");
             Ok(format!(
-                "INCONCLUSIVE: {reason}. Could not confirm in time — tell the \
-                 player it is probably fine but they may want to launch once."
+                "INCONCLUSIVE: could not run the verification boot ({why}). \
+                 Tell the player it is UNVERIFIED — probably fine but they \
+                 should launch once themselves; do not assert it works."
             ))
         }
-        crate::launch::SmokeVerdict::Failed { mod_name, reason } => {
-            tool_chip(tx, "verify_pack", "failed — analyzing");
-            // Prefer the full crash report; fall back to the log reason.
-            let crash = newest_crash_report(&instance_id).unwrap_or_else(|| {
-                format!(
-                    "{}{}",
-                    mod_name
-                        .as_ref()
-                        .map(|m| format!("mod: {m}\n"))
-                        .unwrap_or_default(),
-                    reason
-                )
-            });
-            let mods: Vec<String> =
-                inst.mods.iter().map(|m| m.name.clone()).collect();
-            match crate::settings::anthropic_key() {
-                Some(key) => match analyze_crash(&key, &crash, &mods).await {
-                    Ok(diag) => Ok(format!("VERIFICATION FAILED.\n{diag}")),
-                    Err(e) => Ok(format!(
-                        "VERIFICATION FAILED: {reason}. (Automated analysis \
-                         unavailable: {e}.) Tell the player which mod the log \
-                         names and ASK before changing anything."
-                    )),
-                },
-                None => Ok(format!(
-                    "VERIFICATION FAILED: {reason}. Tell the player and ASK \
-                     before changing the pack (no Anthropic key for an \
-                     automated diagnosis)."
-                )),
-            }
+        GateVerdict::Blocked(detail) => {
+            tool_chip(tx, "verify_pack", "failed: repairing");
+            Ok(format!(
+                "VERIFICATION FAILED.\n{detail}\nRepair it now per the steps \
+                 above (do NOT ask permission for a repin/dep-add; report \
+                 each change), then call verify_pack again."
+            ))
+        }
+        GateVerdict::Escalate(msg) => {
+            tool_chip(tx, "verify_pack", "needs player decision");
+            Ok(format!(
+                "VERIFICATION FAILED — autonomous repair is exhausted for \
+                 this stage. STOP and put the choice to the player; wait for \
+                 their answer (the assembled tools are paused until they \
+                 reply):\n{msg}"
+            ))
         }
     }
 }
@@ -4562,7 +5130,7 @@ mod verify_tests {
     use super::format_analyst;
 
     #[test]
-    fn well_formed_analyst_json_becomes_surface_and_wait_instruction() {
+    fn well_formed_analyst_json_becomes_autonomous_repair_instruction() {
         let raw = r#"Sure, here is the analysis:
         {"culprit_mod":"create_dd","root_class":"version_break",
          "one_line":"create_dd 0.1d targets Create 0.5.x but the pack has Create 6.",
@@ -4571,9 +5139,12 @@ mod verify_tests {
         assert!(out.contains("culprit: create_dd"));
         assert!(out.contains("class: version_break"));
         assert!(out.contains("Remove create_dd"));
-        // The surface-and-wait contract MUST be in the tool result.
-        assert!(out.contains("ASK whether to apply"));
-        assert!(out.contains("at most once"));
+        // The autonomous-repair contract replaced the old surface-and-wait /
+        // never-loop text (which contradicted the repair loop).
+        assert!(out.contains("edit_pack"));
+        assert!(out.contains("removal last"));
+        assert!(!out.contains("at most once"));
+        assert!(!out.contains("ASK whether to apply"));
     }
 
     #[test]
@@ -5323,6 +5894,8 @@ mod edit_pack_real_data_tests {
             sha512: String::new(),
             download_url: String::new(),
             file_size: 0,
+            client_side: "required".into(),
+            server_side: "required".into(),
         }
     }
 
@@ -5433,50 +6006,81 @@ mod edit_pack_real_data_tests {
         assert_eq!(r.roots, vec!["A".to_string()]);
     }
 
-    /// Reverse-dependency safety: B requires A (real Modrinth edge), so
-    /// removing A re-pulls it via B → refused, and the requirer is named from
-    /// B's REAL jar manifest (`requires` modid ∩ A's `provided`).
+    /// REGRESSION (the live "edit_pack: no change" bug): the instance stores
+    /// canonical Modrinth ids, but the curator passes the SLUG / jar-name the
+    /// crash analysis gave it. Remove must match by id OR jar-stem OR
+    /// "<slug>-…" so it is not silently a noop.
     #[tokio::test]
-    async fn remove_still_required_is_refused_and_attributed() {
+    async fn remove_by_slug_or_jarname_not_just_canonical_id() {
+        let inst = Instance {
+            id: "t".into(),
+            name: "T".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15.0".into(),
+            created: "x".into(),
+            last_played: None,
+            mods: vec![
+                PinnedMod {
+                    project_id: "P7dR8mSH".into(), // canonical hash id
+                    version_id: "YblXfKtI".into(),
+                    name: "fabric-api-0.91.0+1.20.1.jar".into(),
+                    path: "mods/fabric-api-0.91.0+1.20.1.jar".into(),
+                    sha1: String::new(),
+                    sha512: String::new(),
+                    download_url: String::new(),
+                    file_size: 0,
+                    client_side: "required".into(),
+                    server_side: "required".into(),
+                },
+                pin("keep", "k1"),
+            ],
+            roots: vec!["P7dR8mSH".into(), "keep".into()],
+        };
+        let pv = [
+            ("P7dR8mSH", ver("P7dR8mSH", "YblXfKtI", "1.20.1", &[])),
+            ("keep", ver("keep", "k1", "1.20.1", &[])),
+        ];
+        // Curator removes by SLUG, not the stored hash id.
+        let r = run(&inst, &[], &["fabric-api".into()], &pv, Default::default())
+            .await
+            .expect("ok");
+        assert!(
+            !r.entries.iter().any(|e| e.project_id == "P7dR8mSH"),
+            "slug 'fabric-api' actually removed the P7dR8mSH mod"
+        );
+        assert!(!r.roots.contains(&"P7dR8mSH".to_string()));
+        assert!(!r.noop, "must NOT report 'no change'");
+        assert!(r.entries.iter().any(|e| e.project_id == "keep"));
+    }
+
+    /// NEW CONTRACT: remove is LITERAL. Removing A even though B requires it
+    /// is NOT refused — no static reverse-dep analysis. The verify boot is
+    /// the sole authority (it will report "B requires A which is missing");
+    /// the curator then re-adds A or removes B per Fabric's remediation.
+    #[tokio::test]
+    async fn remove_is_literal_even_if_still_required() {
         let inst = instance(&["A", "B"], &[("A", "a1"), ("B", "b1")]);
         let pv = [
             ("A", ver("A", "a1", "1.20.1", &[])),
             ("B", ver("B", "b1", "1.20.1", &["A"])),
         ];
-        let mut man = std::collections::HashMap::new();
-        man.insert(
-            "A".to_string(),
-            crate::registry::JarManifest {
-                provided: vec![("amod".into(), String::new())],
-                requires: vec![],
-                breaks: vec![],
-                version: String::new(),
-            },
-        );
-        man.insert(
-            "B".to_string(),
-            crate::registry::JarManifest {
-                provided: vec![],
-                requires: vec![("amod".into(), "*".into())],
-                breaks: vec![],
-                version: String::new(),
-            },
-        );
-        let e = run(&inst, &[], &["A".into()], &pv, man)
+        let r = run(&inst, &[], &["A".into()], &pv, Default::default())
             .await
-            .expect_err("must refuse");
-        match e {
-            EditError::StillRequired(v) => {
-                assert_eq!(v.len(), 1);
-                assert_eq!(v[0].label, "A");
-                assert!(
-                    v[0].required_by.iter().any(|r| r == "B"),
-                    "attributed to B from jar metadata, got {:?}",
-                    v[0].required_by
-                );
-            }
-            other => panic!("expected StillRequired, got {other:?}"),
-        }
+            .expect("remove is literal — never refused");
+        assert!(
+            !r.entries.iter().any(|e| e.project_id == "A"),
+            "A literally removed"
+        );
+        assert!(
+            r.entries.iter().any(|e| e.project_id == "B"),
+            "B kept (no reverse-dep prune)"
+        );
+        assert_eq!(r.removed, vec!["A".to_string()]);
+        assert!(
+            r.pruned_orphans.is_empty(),
+            "no orphan pruning — orphans linger, the boot is the authority"
+        );
     }
 
     /// Add is dependency-complete: NEW requires DEP → both land; NEW is an
@@ -5500,9 +6104,10 @@ mod edit_pack_real_data_tests {
         assert!(!r.roots.contains(&"DEP".to_string()));
     }
 
-    /// The `combined_issues` fix: an added mod with NO version compatible
-    /// with the pack's MC must NOT slip the gate silently — it is blocked
-    /// (or, at minimum, never silently added).
+    /// NEW CONTRACT: a no-version add whose project has NO version compatible
+    /// with the pack's MC has nothing to pin → `EditError::Resolve` (still
+    /// "not silently accepted", just surfaced as a resolve failure, not a
+    /// static combined_issues block).
     #[tokio::test]
     async fn add_incompatible_game_version_is_not_silently_accepted() {
         let inst = instance(&["A"], &[("A", "a1")]);
@@ -5511,28 +6116,21 @@ mod edit_pack_real_data_tests {
             ("BAD", ver("BAD", "x1", "1.19.2", &[])), // wrong MC only
         ];
         match run(&inst, &add1("BAD"), &[], &pv, Default::default()).await {
-            Err(EditError::Conflicts(v)) => {
-                assert!(!v.is_empty(), "blocked with a reported conflict");
-            }
-            Ok(r) => {
-                assert!(
-                    !r.entries.iter().any(|e| e.project_id == "BAD"),
-                    "an MC-incompatible add must never be silently included"
-                );
-                assert!(!r.added.contains(&"BAD".to_string()));
-            }
-            Err(other) => panic!("unexpected error {other:?}"),
+            Err(EditError::Resolve(m)) => assert!(
+                m.contains("BAD") && m.contains("compatible"),
+                "no-compatible-version add surfaced as Resolve, got: {m}"
+            ),
+            other => panic!("expected EditError::Resolve, got {other:?}"),
         }
     }
 
-    /// Regression guard for the `combined_issues` fix specifically. With an
-    /// EXPLICIT version_id the best-version pre-resolve is skipped, so the
-    /// incompatible mod is pinned as a root, lands in the resolved closure,
-    /// and is caught ONLY by the `validate_pack` half of `combined_issues`
-    /// (not the resolver's dep-issues, not the pre-resolve early-exit). If
-    /// the gate ever regresses to resolver-issues-only this fails.
+    /// NEW CONTRACT: an EXPLICIT version_id is TRUSTED and pinned verbatim —
+    /// no static MC-compatibility block. The curator pins the exact version
+    /// the gate's Fabric remediation told it to; the verify boot is the sole
+    /// authority and will reject a genuinely wrong one. (Layer 1 / static
+    /// combined_issues in edit_pack is deliberately gone.)
     #[tokio::test]
-    async fn explicit_incompatible_version_blocked_via_combined_issues() {
+    async fn explicit_pin_is_trusted_left_to_the_boot() {
         let inst = instance(&["A"], &[("A", "a1")]);
         let pv = [
             ("A", ver("A", "a1", "1.20.1", &[])),
@@ -5540,23 +6138,17 @@ mod edit_pack_real_data_tests {
         ];
         let add = vec![ModRef {
             project_id: "BAD".into(),
-            version_id: "x1".into(), // EXPLICIT → pre-resolve is skipped
+            version_id: "x1".into(), // EXPLICIT → trusted, not statically vetted
         }];
-        match run(&inst, &add, &[], &pv, Default::default()).await {
-            Err(EditError::Conflicts(v)) => assert!(
-                v.iter().any(|i| matches!(
-                    i,
-                    pack::ValidationIssue::IncompatibleGameVersion { .. }
-                )),
-                "combined_issues must surface the per-entry \
-                 IncompatibleGameVersion, got {v:?}"
-            ),
-            Ok(r) => assert!(
-                !r.entries.iter().any(|e| e.project_id == "BAD"),
-                "an explicit MC-incompatible pin must never land silently"
-            ),
-            Err(other) => panic!("unexpected error {other:?}"),
-        }
+        let r = run(&inst, &add, &[], &pv, Default::default())
+            .await
+            .expect("explicit pin is trusted, never statically blocked");
+        assert!(
+            r.entries.iter().any(|e| e.project_id == "BAD"
+                && e.version_id == "x1"),
+            "explicit version pinned verbatim; the boot judges it"
+        );
+        assert!(r.added.contains(&"BAD".to_string()));
     }
 
     /// Swap in ONE call (atomic): remove B + add C → single resolve, both
@@ -5685,14 +6277,13 @@ mod edit_pack_real_data_tests {
     /// `apply_edit_writes` (real on-disk prune + .mrpack) under a tempdir.
     ///
     /// ADD: a mod whose REAL Modrinth edge requires a dep ⇒ the updated
-    /// Instance.mods CONTAINS the added project AND its pulled dep, both jars
-    /// land, .mrpack exists. REMOVE the added root ⇒ it is gone from
-    /// Instance.mods, the dep auto-prunes as an orphan, and BOTH stale jars
-    /// are deleted off disk (seeded fakes prove the prune, not just absence).
-    /// This is the "the mod actually gets added/removed" guarantee the naive
-    /// append/retain commands did not provide.
+    /// Add pulls the dep, both jars land, .mrpack written. REMOVE the added
+    /// root ⇒ it is gone from Instance.mods and its jar is deleted — but the
+    /// dep DEP is a deliberate lingering orphan (NEW CONTRACT: no orphan
+    /// prune; harmless dead weight, the boot is the authority). The kept mod
+    /// A is untouched.
     #[tokio::test]
-    async fn ui_route_add_then_remove_adds_and_prunes_on_disk() {
+    async fn ui_route_add_then_remove_leaves_orphan_on_disk() {
         let td = tempfile::tempdir().unwrap();
         let dir = td.path();
         std::fs::create_dir_all(dir.join("mods")).unwrap();
@@ -5760,8 +6351,8 @@ mod edit_pack_real_data_tests {
             "NEW recorded as removed"
         );
         assert!(
-            rm_res.pruned_orphans.contains(&"DEP".to_string()),
-            "DEP auto-pruned as orphan, got {:?}",
+            rm_res.pruned_orphans.is_empty(),
+            "NEW CONTRACT: no orphan pruning, got {:?}",
             rm_res.pruned_orphans
         );
         let after_rm =
@@ -5777,17 +6368,17 @@ mod edit_pack_real_data_tests {
             "removed project gone from Instance.mods"
         );
         assert!(
-            !rm_pids.contains("DEP"),
-            "orphaned dep gone from Instance.mods"
+            rm_pids.contains("DEP"),
+            "orphan dep LINGERS (no prune) — boot is the authority"
         );
         assert!(rm_pids.contains("A"), "untouched mod survives");
         assert!(
             !dir.join("mods/NEW.jar").exists(),
-            "removed mod's jar pruned off disk"
+            "removed mod's jar deleted off disk"
         );
         assert!(
-            !dir.join("mods/DEP.jar").exists(),
-            "orphaned dep's jar pruned off disk"
+            dir.join("mods/DEP.jar").exists(),
+            "orphan dep's jar lingers on disk (deliberate, harmless)"
         );
         assert!(
             dir.join("mods/A.jar").exists(),

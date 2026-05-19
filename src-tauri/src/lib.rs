@@ -324,6 +324,16 @@ async fn curator_send(
 ) -> Result<(), String> {
     // Default to the curating phase if an older frontend omits it.
     let phase = phase.unwrap_or_else(|| "curating".to_string());
+    // The verify pipeline's Stage 1 is a real client smoke, which needs a
+    // Microsoft account. Require sign-in up front so verification is always
+    // available — never half a pipeline.
+    if auth::load_account().is_none() {
+        return Err(
+            "Sign in with Microsoft first (Instances tab) — the curator \
+             verifies packs by booting them, which needs your account."
+                .to_string(),
+        );
+    }
     let key = settings::anthropic_key().ok_or_else(|| {
         "No Anthropic API key. Add one in Settings, or set ANTHROPIC_API_KEY in your environment."
             .to_string()
@@ -451,6 +461,8 @@ fn import_mrpack(path: String) -> Result<Instance, String> {
                 sha512: m.sha512,
                 download_url: m.download_url,
                 file_size: m.file_size,
+                client_side: "required".to_string(),
+                server_side: "required".to_string(),
             })
             .collect(),
         // Imported packs are a frozen .mrpack snapshot with no Modrinth
@@ -502,37 +514,65 @@ async fn launch_instance(app: AppHandle, instance_id: String) -> Result<(), Stri
     Ok(())
 }
 
-/// Tier 3: boot the pack once and report whether mods initialize cleanly
-/// (catches the dependency-reject / entrypoint-crash classes before the user
-/// has to discover them by playing). Report-only; never mutates the pack.
+/// The Instances "Verify" button. UNIFIED with the curator's `verify_pack`:
+/// both now run the SAME `curator::world_gen_gate` (Stage-1 client smoke +
+/// Stage-2 headless world-gen), so the manual button and the chat tool can
+/// never disagree about whether a pack is broken — and the button is no
+/// longer blind to the server/world-gen crash class. Auth is handled inside
+/// the gate (no sign-in => `Unverified` with a caveat, not a hard error), so
+/// there is no separate auth pre-check here. Report-only; never mutates.
 #[tauri::command]
 async fn smoke_test_instance(
     app: AppHandle,
+    state: tauri::State<'_, Modrinth>,
     instance_id: String,
 ) -> Result<launch::SmokeVerdict, String> {
     let inst = instance::load_instances()
         .into_iter()
         .find(|i| i.id == instance_id)
         .ok_or_else(|| "instance not found".to_string())?;
-    let account = auth::load_account().ok_or_else(|| {
-        "Sign in with Microsoft first (Instances tab).".to_string()
-    })?;
-    let client_id = settings::ms_client_id();
-    let account = auth::ensure_fresh(&client_id, account)
-        .await
-        .map_err(|e| e.to_string())?;
-    let _ = auth::save_account(&account);
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<LaunchEvent>();
+    // The gate speaks CuratorEvent; bridge the user-visible ones onto the
+    // `launch-event` stream the Instances UI already renders (log + status).
+    let (tx, mut rx) =
+        tokio::sync::mpsc::unbounded_channel::<CuratorEvent>();
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(ev) = rx.recv().await {
-            let _ = app2.emit("launch-event", ev);
+            let mapped = match ev {
+                CuratorEvent::Text(s) => Some(LaunchEvent::Log(s)),
+                CuratorEvent::Tool { name, status } => {
+                    Some(LaunchEvent::Status(format!("{name}: {status}")))
+                }
+                CuratorEvent::Error(s) => Some(LaunchEvent::Error(s)),
+                _ => None,
+            };
+            if let Some(m) = mapped {
+                let _ = app2.emit("launch-event", m);
+            }
         }
     });
-    launch::smoke_test(&inst, &account, None, tx)
-        .await
-        .map_err(|e| e.to_string())
+
+    let verdict =
+        curator::world_gen_gate(&inst, state.inner(), &tx).await;
+    Ok(match verdict {
+        curator::GateVerdict::Verified => launch::SmokeVerdict::Ok,
+        curator::GateVerdict::Unverified(why) => {
+            launch::SmokeVerdict::Inconclusive { reason: why }
+        }
+        curator::GateVerdict::Blocked(detail) => {
+            launch::SmokeVerdict::Failed {
+                mod_name: None,
+                reason: detail,
+            }
+        }
+        curator::GateVerdict::Escalate(msg) => {
+            launch::SmokeVerdict::Failed {
+                mod_name: None,
+                reason: msg,
+            }
+        }
+    })
 }
 
 // ---- Instance management ----
@@ -574,6 +614,8 @@ async fn resolve_pinned(
         sha512: f.hashes.sha512.clone(),
         download_url: f.url.clone(),
         file_size: f.size,
+        client_side: "required".to_string(),
+        server_side: "required".to_string(),
     })
 }
 

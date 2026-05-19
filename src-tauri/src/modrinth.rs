@@ -6,8 +6,16 @@
 //! no auth. Public rate limit is 300 req/min per IP.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 const API_BASE: &str = "https://api.modrinth.com/v2";
+/// versions() of a big project (fabric-api has hundreds) is the call that
+/// dominates a repair loop — every edit_pack re-resolves the closure. Cache
+/// it per session so the loop fetches it ONCE, not per attempt.
+const VERSIONS_TTL: Duration = Duration::from_secs(300);
 const USER_AGENT: &str = concat!(
     "Anvil/",
     env!("CARGO_PKG_VERSION"),
@@ -24,30 +32,127 @@ pub enum ModrinthError {
 
 pub type Result<T> = std::result::Result<T, ModrinthError>;
 
+type VersionsCache = Arc<Mutex<HashMap<String, (Instant, Vec<Version>)>>>;
+
 #[derive(Clone)]
 pub struct Modrinth {
     http: reqwest::Client,
+    /// Shared across every `.clone()` (Arc) so the repair loop's repeated
+    /// `versions()` calls for the same project (esp. fabric-api) hit cache.
+    vers_cache: VersionsCache,
+}
+
+/// A transport-level failure (connect refused, request/body timeout, dropped
+/// connection mid-decode) — distinct from an HTTP status. These are what kill
+/// `versions(fabric-api)` (huge payload) with `os error 60`; the old client
+/// only retried HTTP status, so every edit_pack dead-ended here.
+fn is_transient_transport(e: &reqwest::Error) -> bool {
+    e.is_timeout()
+        || e.is_connect()
+        || e.is_request()
+        || e.is_body()
+        || e.is_decode()
+}
+
+/// Pure, unit-tested backoff schedule. Transport errors retry FAST (1,2,4s,
+/// max 3 — the server isn't asking us to wait, the pipe broke). HTTP 429/5xx
+/// retry SLOWER and more (1,2,4,8,16s, max 5 — honour any `Retry-After`).
+fn transport_wait(attempt: u32) -> Option<u64> {
+    (attempt < 3).then(|| 1u64 << attempt)
+}
+fn status_wait(attempt: u32, retry_after: Option<u64>) -> Option<u64> {
+    if attempt >= 5 {
+        return None;
+    }
+    Some(match retry_after.filter(|s| *s <= 60) {
+        Some(s) => s,
+        None => 1u64 << attempt,
+    })
 }
 
 impl Modrinth {
     pub fn new() -> Self {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            // A hung fetch (no upstream timeout) used to sit in OS-level
+            // retry for minutes before `os error 60`, dead-ending the repair
+            // loop. Bound every request so a slow Modrinth fails FAST and the
+            // transport-retry below kicks in instead of hanging.
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(60))
             .build()
             .expect("reqwest client builds with a static user agent");
-        Self { http }
+        Self {
+            http,
+            vers_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     async fn get_json<T: for<'de> Deserialize<'de>>(&self, url: &str) -> Result<T> {
-        let resp = self.http.get(url).send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(ModrinthError::Status {
-                status: status.as_u16(),
-                url: url.to_string(),
-            });
+        // Two independent retry budgets: transport (the broken-pipe / timeout
+        // class that dead-ended edit_pack) and HTTP status (429/5xx burst from
+        // the repair loop re-resolving the closure). Absorbed here so the
+        // curator never sees a "transient resolver issue" to narrate around.
+        let mut t_attempt = 0u32;
+        let mut s_attempt = 0u32;
+        loop {
+            let resp = match self.http.get(url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if is_transient_transport(&e) {
+                        if let Some(w) = transport_wait(t_attempt) {
+                            t_attempt += 1;
+                            tokio::time::sleep(Duration::from_secs(w)).await;
+                            continue;
+                        }
+                    }
+                    return Err(e.into());
+                }
+            };
+            let status = resp.status();
+            if status.is_success() {
+                match resp.json::<T>().await {
+                    Ok(v) => return Ok(v),
+                    Err(e) => {
+                        // Body cut off mid-stream (dropped connection) — same
+                        // transient class, retry on the transport budget.
+                        if is_transient_transport(&e) {
+                            if let Some(w) = transport_wait(t_attempt) {
+                                t_attempt += 1;
+                                tokio::time::sleep(Duration::from_secs(w))
+                                    .await;
+                                continue;
+                            }
+                        }
+                        return Err(e.into());
+                    }
+                }
+            }
+            let code = status.as_u16();
+            if !(code == 429 || code == 502 || code == 503 || code == 504) {
+                return Err(ModrinthError::Status {
+                    status: code,
+                    url: url.to_string(),
+                });
+            }
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            match status_wait(s_attempt, retry_after) {
+                Some(w) => {
+                    s_attempt += 1;
+                    tokio::time::sleep(Duration::from_secs(w)).await;
+                }
+                None => {
+                    return Err(ModrinthError::Status {
+                        status: code,
+                        url: url.to_string(),
+                    })
+                }
+            }
         }
-        Ok(resp.json::<T>().await?)
     }
 
     /// Search projects. `facets` is Modrinth's facet syntax already encoded by
@@ -79,8 +184,44 @@ impl Modrinth {
     }
 
     pub async fn versions(&self, project_id: &str) -> Result<Vec<Version>> {
-        self.get_json(&format!("{API_BASE}/project/{project_id}/version"))
+        if let Some((t, v)) = self.vers_cache.lock().await.get(project_id) {
+            if t.elapsed() < VERSIONS_TTL {
+                return Ok(v.clone());
+            }
+        }
+        let v: Vec<Version> = self
+            .get_json(&format!("{API_BASE}/project/{project_id}/version"))
+            .await?;
+        self.vers_cache
+            .lock()
             .await
+            .insert(project_id.to_string(), (Instant::now(), v.clone()));
+        Ok(v)
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::{status_wait, transport_wait};
+
+    #[test]
+    fn transport_budget_is_short_and_bounded() {
+        // 1,2,4s then give up — a broken pipe won't heal by waiting longer.
+        assert_eq!(transport_wait(0), Some(1));
+        assert_eq!(transport_wait(1), Some(2));
+        assert_eq!(transport_wait(2), Some(4));
+        assert_eq!(transport_wait(3), None);
+    }
+
+    #[test]
+    fn status_budget_honours_retry_after_then_caps() {
+        // Exponential when no Retry-After.
+        assert_eq!(status_wait(0, None), Some(1));
+        assert_eq!(status_wait(4, None), Some(16));
+        assert_eq!(status_wait(5, None), None); // bounded at 5
+                                                // Server-sent Retry-After wins (<=60s sanity cap).
+        assert_eq!(status_wait(0, Some(7)), Some(7));
+        assert_eq!(status_wait(0, Some(9999)), Some(1)); // absurd → ignore
     }
 }
 

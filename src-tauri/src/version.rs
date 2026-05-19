@@ -181,9 +181,13 @@ impl PartialOrd for Version {
     }
 }
 
-/// Compare two segment lists element-wise. Each segment compares numerically
-/// when *both* sides are all-ASCII-digits, else lexically. Missing segments are
-/// treated as `"0"` so `1.2` == `1.2.0` and `1.0.0` < `1.0.0+1`.
+/// Compare two segment lists element-wise. Within a segment the leading run
+/// of ASCII digits compares NUMERICALLY; a trailing non-digit suffix
+/// (a `-fabric`/`-BETA`/`-f` packaging or pre-release tag) only breaks a
+/// numeric tie, lexically. So `2.16.9-fabric` < `2.16.26` (9 < 26, fixing
+/// the old `'9' > '2'` lexical bug) while `0.5.1` < `0.5.1-f` < `0.5.2` still
+/// holds (Fabric pre-release rule). A segment with no digit prefix is purely
+/// lexical. Missing segments are `"0"` so `1.2` == `1.2.0`, `1.0.0` < `1.0.0+1`.
 fn cmp_segments(a: &[String], b: &[String]) -> Ordering {
     let n = a.len().max(b.len());
     for i in 0..n {
@@ -197,23 +201,40 @@ fn cmp_segments(a: &[String], b: &[String]) -> Ordering {
     Ordering::Equal
 }
 
+/// Leading ASCII-digit run + remaining suffix: `"9-fabric"` →
+/// `("9","-fabric")`, `"26"` → `("26","")`, `"BETA"` → `("","BETA")`,
+/// `"20-2"` → `("20","-2")`. ASCII digits are one byte, so the split is
+/// always on a char boundary.
+fn split_num_prefix(s: &str) -> (&str, &str) {
+    let end = s.bytes().take_while(|b| b.is_ascii_digit()).count();
+    s.split_at(end)
+}
+
 fn cmp_segment(x: &str, y: &str) -> Ordering {
-    let x_num = !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit());
-    let y_num = !y.is_empty() && y.bytes().all(|c| c.is_ascii_digit());
-    if x_num && y_num {
-        // Parse may overflow on absurd inputs; fall back to length-then-lex
-        // which is correct for non-negative decimal integers.
-        match (x.parse::<u128>(), y.parse::<u128>()) {
-            (Ok(a), Ok(b)) => a.cmp(&b),
-            _ => x
-                .trim_start_matches('0')
-                .len()
-                .cmp(&y.trim_start_matches('0').len())
-                .then_with(|| x.cmp(y)),
-        }
-    } else {
-        x.cmp(y)
+    let (xn, xr) = split_num_prefix(x);
+    let (yn, yr) = split_num_prefix(y);
+    // Only when BOTH sides start with digits do we split numeric-vs-tag.
+    // If either lacks a digit prefix (a pure tag like "kotlin"/"mc1", or the
+    // padded "0" for an absent build segment), fall back to whole-segment
+    // lexical — UNCHANGED from before, so `1.0.0` < `1.0.0+mc1.20.1` and the
+    // build-metadata asymmetry invariants still hold. The bug was strictly
+    // the both-have-a-numeric-prefix case (`9-fabric` vs `26`).
+    if xn.is_empty() || yn.is_empty() {
+        return x.cmp(y);
     }
+    // Numeric prefixes as integers; a u128-overflowing prefix degrades to
+    // length-then-lex (correct for non-negative decimal integers).
+    let num = match (xn.parse::<u128>(), yn.parse::<u128>()) {
+        (Ok(a), Ok(b)) => a.cmp(&b),
+        _ => xn
+            .trim_start_matches('0')
+            .len()
+            .cmp(&yn.trim_start_matches('0').len())
+            .then_with(|| xn.cmp(yn)),
+    };
+    // On a numeric tie the trailing tag decides: `""` (no tag) sorts before
+    // `"-f"`, giving the documented `0.5.1` < `0.5.1-f`.
+    num.then_with(|| xr.cmp(yr))
 }
 
 /// Comparison for a relational predicate (`>= > <= <`): include build
@@ -646,6 +667,66 @@ mod tests {
     fn sat(ver: &str, req: &str) -> bool {
         let r = VersionReq::parse(req).expect("req parses");
         satisfies(&v(ver), &r)
+    }
+
+    /// REPRO (Harvest Hollow): Supplementaries `depends moonlight @
+    /// [>=1.20-2.16.26]`. Moonlight's Modrinth `version_number`s are
+    /// MC-prefixed (`1.20-2.16.32-fabric`). The repin loop must (a) PARSE
+    /// every such string, (b) find `1.20-2.16.32-fabric` SATISFIES the range,
+    /// and (c) ORDER it strictly above the stuck pin `1.20-2.13.82`.
+    #[test]
+    fn moonlight_mc_prefixed_versions_satisfy_and_order() {
+        let req = ">=1.20-2.16.26";
+        // every candidate must parse (None ⇒ silently dropped by filter_map)
+        for s in [
+            "1.20-2.16.32-fabric",
+            "1.20-2.16.26-fabric",
+            "1.20-2.13.82-fabric",
+            "1.20-2.13.82",
+        ] {
+            assert!(Version::parse(s).is_some(), "did not parse: {s}");
+        }
+        // the stuck pin must NOT satisfy; the available build MUST
+        assert!(
+            !sat("1.20-2.13.82-fabric", req),
+            "2.13.82 wrongly satisfies {req}"
+        );
+        assert!(
+            sat("1.20-2.16.32-fabric", req),
+            "2.16.32-fabric should satisfy {req} but does NOT — this is the bug"
+        );
+        assert!(sat("1.20-2.16.26-fabric", req), "2.16.26 boundary");
+        // ordering the resolver's `max_by` relies on
+        assert!(
+            v("1.20-2.16.32-fabric") > v("1.20-2.13.82-fabric"),
+            "2.16.32 must rank above 2.13.82"
+        );
+        // (The single-digit trailing-segment lexical defect — `2.16.9-fabric`
+        // vs `>=…2.16.26` — was #62; now FIXED in `cmp_segment` and guarded
+        // by `numeric_prefix_compare_for_tagged_trailing_segments`.)
+    }
+
+    /// #62 FIXED: a single-digit trailing segment carrying a `-tag` suffix
+    /// (`2.16.9-fabric`) now compares its numeric prefix NUMERICALLY, so
+    /// 9 < 26 (was the lexical bug: '9' > '2'). Also guards the adjacent
+    /// invariants the fix must not regress.
+    #[test]
+    fn numeric_prefix_compare_for_tagged_trailing_segments() {
+        // the original defect, now correct
+        assert!(!sat("1.20-2.16.9-fabric", ">=1.20-2.16.26"));
+        assert!(sat("1.20-2.16.26-fabric", ">=1.20-2.16.26"));
+        assert!(sat("1.20-2.16.32-fabric", ">=1.20-2.16.26"));
+        assert!(v("1.20-2.16.9-fabric") < v("1.20-2.16.26-fabric"));
+        // a `-tag` orders just ABOVE the bare number on a numeric tie, but
+        // still BELOW the next number (documented Fabric pre-release rule)
+        assert!(v("0.5.1") < v("0.5.1-f"));
+        assert!(v("0.5.1-f") < v("0.5.2"));
+        assert!(sat("2.4.2-BETA", ">=2.4.2-BETA"));
+        // unrelated invariants must be unchanged
+        assert_eq!(v("1.2"), v("1.2.0"));
+        assert!(v("1.0.0") < v("1.0.0+1"));
+        assert!(v("1.9.2+kotlin.1.8.10") < v("1.13.11+kotlin.2.3.21"));
+        assert!(v("1.10.20+kotlin.1.9.24") < v("1.10.20+kotlin.2.0.0"));
     }
 
     // ---- comparison order (the canonical rule) -------------------------

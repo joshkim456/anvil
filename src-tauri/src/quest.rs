@@ -2693,6 +2693,8 @@ mod tests {
                 sha512: "s5".to_string(),
                 download_url: "u".to_string(),
                 file_size: 1,
+                client_side: "required".to_string(),
+                server_side: "required".to_string(),
             }],
             roots: vec![],
         };
