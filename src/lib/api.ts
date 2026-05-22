@@ -192,6 +192,10 @@ export interface OriginPower {
   name: string;
   description: string;
   shipped: boolean;
+  /** "active" = G-key toggle skill, "reactive" = on-hit / on-kill auto-trigger,
+   *  undefined = plain passive. UI renders a TOGGLE / REACTIVE badge to
+   *  distinguish active abilities from the wall of passives. */
+  kind?: "active" | "reactive";
 }
 
 export interface OriginEntry {
@@ -227,7 +231,7 @@ export interface ChatMessage {
   content: string;
 }
 
-export type Phase = "curating" | "assembled" | "progression" | "complete";
+export type Phase = "curating" | "assembled" | "progression" | "iterating";
 
 export interface ChatThread {
   id: string;

@@ -1,9 +1,11 @@
 //! Anvil Tauri application: command surface + event bridging. Heavy logic
 //! lives in the modules; this file owns wiring so the modules stay decoupled.
 
-// The curator builds large `serde_json::json!` tool schemas; the default
-// macro recursion limit (128) is not enough to expand them.
-#![recursion_limit = "1024"]
+// The curator builds large `serde_json::json!` tool schemas, and the
+// `origins::WhenCondition` enum's Serialize derive recurses through
+// `Vec<WhenCondition>` (And/Or/Not). 1024 is no longer enough; 2048 is
+// comfortable with the Box-free single-recursion-path design.
+#![recursion_limit = "2048"]
 
 mod auth;
 mod cache;
@@ -515,7 +517,7 @@ async fn launch_instance(app: AppHandle, instance_id: String) -> Result<(), Stri
 }
 
 /// The Instances "Verify" button. UNIFIED with the curator's `verify_pack`:
-/// both now run the SAME `curator::world_gen_gate` (Stage-1 client smoke +
+/// both now run the SAME `curator::verify_gate` (Stage-1 client smoke +
 /// Stage-2 headless world-gen), so the manual button and the chat tool can
 /// never disagree about whether a pack is broken — and the button is no
 /// longer blind to the server/world-gen crash class. Auth is handled inside
@@ -554,7 +556,7 @@ async fn smoke_test_instance(
     });
 
     let verdict =
-        curator::world_gen_gate(&inst, state.inner(), &tx).await;
+        curator::verify_gate(&inst, state.inner(), &tx).await;
     Ok(match verdict {
         curator::GateVerdict::Verified => launch::SmokeVerdict::Ok,
         curator::GateVerdict::Unverified(why) => {
@@ -877,6 +879,13 @@ struct OriginPowerView {
     name: String,
     description: String,
     shipped: bool,
+    /// A coarse category surfaced to the UI for badge rendering. `Some("active")`
+    /// for `apoli:active_self` (keybind-triggered toggle skill — should render
+    /// as a TOGGLE pill so the player spots it among passive perks), `Some("lifetime")`
+    /// for once-per-cycle moments, otherwise `None` (passive). Shipped powers
+    /// classify by id rather than by file-side power_type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -920,14 +929,19 @@ async fn get_origins(instance_id: String) -> Result<Option<OriginsView>, String>
                         // Anything else (e.g. `origins:<id>`) => shipped label.
                         let bare_local = r.strip_prefix("anvil:").unwrap_or(r);
                         if let Some(p) = local.get(bare_local) {
+                            let kind = match p.power_type.as_str() {
+                                "apoli:active_self" => Some("active"),
+                                "apoli:self_action_when_hit" => Some("reactive"),
+                                "apoli:self_action_on_hit" | "apoli:action_on_kill" => Some("reactive"),
+                                _ => None,
+                            };
                             OriginPowerView {
                                 name: p.name.clone(),
                                 description: p.description.clone(),
                                 shipped: false,
+                                kind,
                             }
                         } else {
-                            // Shipped: take the part after the colon (or the
-                            // whole ref if unqualified) for the label table.
                             let pid =
                                 r.split_once(':').map(|(_, p)| p).unwrap_or(r);
                             let (name, description) =
@@ -936,6 +950,7 @@ async fn get_origins(instance_id: String) -> Result<Option<OriginsView>, String>
                                 name,
                                 description,
                                 shipped: true,
+                                kind: None,
                             }
                         }
                     })

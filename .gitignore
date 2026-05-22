@@ -6,6 +6,7 @@ dist/
 
 # Rust / Tauri
 src-tauri/target/
+src-tauri/target-test/
 src-tauri/gen/
 
 # Secrets: never commit the real .env (only .env.example is tracked)

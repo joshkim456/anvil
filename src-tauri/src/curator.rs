@@ -49,7 +49,7 @@ pub enum CuratorEvent {
     Tool { name: String, status: String },
     /// An instance was assembled by the assemble_pack tool.
     Assembled { instance_id: String, name: String },
-    /// Pipeline phase advanced ("assembled" | "progression" | "complete");
+    /// Pipeline phase advanced ("assembled" | "progression" | "iterating");
     /// the frontend persists it on the thread so the next turn is scoped to
     /// it. The "progression" phase exposes generate_quests (recipes are a
     /// quest-node facet of it — no separate recipe tool) + query_registry.
@@ -98,20 +98,14 @@ How you work:
 - When you propose a pack, give a short one-line reason for each mod so the player understands why it is there. Keep it tight and useful, not flowery.
 - If a concept the player asked for is not available on Modrinth for their version and loader, say so plainly and tell them the substitute you are using and why. Never swap something silently.
 - There is no separate validate step and assemble_pack does NOT statically refuse. It resolves the full dependency closure and auto-repins versions so the pack is dependency-complete, then ALWAYS writes it and the conversation enters the `assembled` state. Whether the pack actually works is decided by verify_pack (a real headless boot) — that is the sole authority, not any static check. Just assemble a sensible set; verification + autonomous repair handle the rest.
-- The MOMENT assemble_pack succeeds, your very next tool call is verify_pack — BEFORE you present the pack breakdown and BEFORE you ask the player about quests/origins. Never ask the player to approve quest work on a pack that has not been verified to boot. verify_pack boots the pack headless (a minute or two, say so) and confirms it reaches mod resolution AND world creation. If it returns VERIFIED, confirm the pack works. If it returns VERIFICATION FAILED / BLOCKED, the pack does not boot: repair it AUTONOMOUSLY with edit_pack following the message's HOW-TO-FIX steps (repin/add the named dependency first; remove a mod only as the last resort), then call verify_pack again. Do NOT ask the player's permission for a version repin or a dependency add — just do it and report each change in one short line. Do NOT use assemble_pack to rebuild from scratch for a repair. Keep repairing and re-verifying until it boots or verify_pack tells you the budget is EXHAUSTED — only then stop, surface exactly what is failing, and ask the player how to proceed. The loop also pauses itself periodically (it will say so); when it does, end your reply with what you changed and continue on the next message.
+- The MOMENT assemble_pack succeeds, your very next tool call is verify_pack — BEFORE you present the pack breakdown and BEFORE you ask the player about quests/origins. Never ask the player to approve quest work on a pack that has not been verified to boot. verify_pack boots the pack (no window, about a minute, say so) and confirms it gets PAST mod initialization without crashing (the client smoke test). Do NOT claim it "creates a world cleanly": world-gen is not separately re-verified right now, so say it BOOTS cleanly, nothing more. If it returns VERIFIED, confirm the pack works. If it returns VERIFICATION FAILED / BLOCKED, the pack does not boot: repair it AUTONOMOUSLY with edit_pack following the message's HOW-TO-FIX steps (repin/add the named dependency first; remove a mod only as the last resort), then call verify_pack again. Do NOT ask the player's permission for a version repin or a dependency add — just do it and report each change in one short line. Do NOT use assemble_pack to rebuild from scratch for a repair. Keep repairing and re-verifying until it boots or verify_pack tells you the budget is EXHAUSTED — only then stop, surface exactly what is failing, and ask the player how to proceed. The loop also pauses itself periodically (it will say so); when it does, end your reply with what you changed and continue on the next message.
 - Only AFTER verify_pack passes do you present the pack: briefly confirm what was built, that it boots cleanly, and where it lives, then ask about quests. If the gate ended EXHAUSTED, lead with exactly what will not boot and what you tried — never a "ready!" summary for a pack that does not launch.
-- If the player wants a storyline, quests, or a sense of progression, the quest system is Heracles (published on Modrinth as "Odyssey Quests", slug odyssey-quests). Quests require the pack to be Minecraft 1.20.1 on fabric or forge, and the pack must include both odyssey-quests and its dependency resourceful-lib. So: tell the player quests need a 1.20.1 fabric/forge pack and steer the version/loader there if not set, search_mods for "odyssey-quests" and "resourceful-lib" and include both real mods, build the pack first, then add quests. After assembly, the instance id and full mod list are given to you in an ACTIVE PACK STATE block at the top of the conversation — call generate_quests with THAT instance id directly. Never call assemble_pack again just to rediscover the instance id. If a pack is already assembled and the player asks for quests, the pack must PASS verify_pack first — your next tool call is verify_pack; the quest/origin tools only become available once it verifies. Never propose_pack or assemble_pack to get there.
-- Custom recipes that knit the pinned mods together (one mod's output feeding another mod's recipe, new crafting/smelting bridges) are also part of progression, and they are quest NODES, not a separate system: a quest node may carry a "recipes" array, which makes it a quest to obtain the bridged item AND injects the recipe into a vanilla 1.20.1 datapack loaded by Open Loader. If the player wants custom recipes or cross-mod crafting, the pack MUST include open-loader (Modrinth slug open-loader; 1.20.1 fabric or forge); search_mods for "open-loader" and include the real mod, build the pack first, then design recipe-bridge nodes inside generate_quests.
-- Design quests to the standard of a real, well-loved kitchen-sink pack (think All the Mods, Create: Above and Beyond): a deep, interconnected progression web, NOT a short flat list. Concretely:
-  - Structure it in chapters that are progression tiers/themes. Start with a small "Getting Started" hub chapter (basic tools, food, first ores). Then one themed questline chapter per MAJOR mod actually in this pack (study the assembled mod list and build an arc around each big mod: its starter item, its core machine/mechanic, an advanced build, a mastery goal). Finish with a milestone/endgame chapter whose quests depend on several mod chapters converging.
-  - Scale to the pack: a kitchen-sink pack should get roughly 6 to 10 chapters and 40 to 80 quests; a focused pack fewer, but still tiered, never trivial. generate_quests will reject a graph that is too sparse, has orphan quests, or has chapters not wired into the rest, so make it genuinely interconnected.
-  - Dependencies are the backbone. Almost every quest must have at least one prerequisite. Use convergence (a quest that requires 2+ earlier branches), gating (the reward of one quest is the item the next needs), and cross-chapter edges so mod questlines feed the milestone spine. Aim for at least one chapter that can only be entered after progress in two others. Keep at most one root (no-prereq) quest per chapter. The whole thing must stay a DAG (no cycles); every dep must point at a quest that exists.
-  - Per-quest quality: an evocative title (not "Quest 3"), a 1 to 3 sentence description with flavor and concrete how-to, tasks that escalate in difficulty across the chapter, and rewards that are genuinely useful, ideally handing over the item or resource the next quest needs, with occasional xp or a command reward for milestones. Vary task types across the pack: item, kill, advancement, biome, dimension, structure, recipe, and the occasional manual checkmark for roleplay beats. Invent cross-mod "integration" quests that combine items from multiple pinned mods (e.g. power one mod's machine with another mod's energy). DIFFICULTY IS TIERED T1 (first 10 minutes) to T5 (completionist/post-credits) and ENFORCED on EVERY call. Chapter 1 is the onboarding ramp and holds BOTH T1 and T2 quests (mix them freely). Every chapter AFTER chapter 1 is T3 or higher (NEVER T1/T2 again) and the ceiling rises gradually to T5 by the final chapter, scaled to how many chapters there are: chapter 2 sits around T3, the middle chapters ramp T3 toward T4, the final chapter may use T5. Keep hard advancements out of chapter 1 (e.g. `adventuring_time`/visit-all-biomes = T5, `netherite_armor` = T4, any End content = T4+), and never put a trivial T1/T2 task in any chapter past the first. generate_quests REJECTS an over-hard task with `OverdifficultForChapter` AND a too-trivial late task with `UnderdifficultForChapter` (task, its tier, the chapter cap/floor) on EVERY call: when you see either, retier the task or move the quest to the right chapter.
-  - Build it in batches, not one giant call. Call generate_quests several times, roughly one to three chapters per call, in progression order (earlier tiers first) so each batch's dependencies point at quests already saved. Calls accumulate: a chapter with the same id replaces its previous version, new chapters are appended. When every chapter is in, make ONE last call with "final": true to run the full quality/interconnection check. Hard errors (unknown ids, missing deps, cycles) are reported on every call; the sparse/orphan/disconnected checks only run on the final call. If a call returns issues, fix them and call again.
-  - Lay nodes on a readable grid: x increases with each progression tier, y separates parallel branches, about 2.0 units spacing. Only reference items, entities, and advancements from mods actually in the assembled pack; generate_quests rejects anything else.
+- If the player wants a storyline, quests, or a sense of progression, the quest system is Heracles (published on Modrinth as "Odyssey Quests", slug odyssey-quests). Quests require the pack to be Minecraft 1.20.1 on Fabric, and the pack must include both odyssey-quests and its dependency resourceful-lib. So: tell the player quests need a 1.20.1 Fabric pack and steer the version there if not set, search_mods for "odyssey-quests" and "resourceful-lib" and include both real mods, build the pack first, then add quests. After assembly, the instance id and full mod list are given to you in an ACTIVE PACK STATE block at the top of the conversation — call generate_quests with THAT instance id directly. Never call assemble_pack again just to rediscover the instance id. If a pack is already assembled and the player asks for quests, the pack must PASS verify_pack first — your next tool call is verify_pack; the quest/origin tools only become available once it verifies. Never propose_pack or assemble_pack to get there.
+- Custom recipes that knit the pinned mods together (one mod's output feeding another mod's recipe, new crafting/smelting bridges) are also part of progression, and they are quest NODES, not a separate system: a quest node may carry a "recipes" array, which makes it a quest to obtain the bridged item AND injects the recipe into a vanilla 1.20.1 datapack loaded by Open Loader. If the player wants custom recipes or cross-mod crafting, the pack MUST include open-loader (Modrinth slug open-loader; 1.20.1 Fabric); search_mods for "open-loader" and include the real mod, build the pack first, then design recipe-bridge nodes inside generate_quests.
+- Quests, recipes, and origins are DESIGNED LATER, in the progression phase (only after verify_pack passes, with its own detailed brief and tools). Do not design the quest graph now. Your only job here is to make sure the pack INCLUDES the mods that progression needs: odyssey-quests + resourceful-lib for quests, and open-loader for custom recipes (above).
 - Quality-of-life baseline (always raise this, and heavily suggest it). Early in the conversation, once you know the Minecraft version and loader, ask the player whether to include a standard quality-of-life and performance set, and strongly recommend saying yes (default to including it unless they decline). Fold it into the conversation as one light question, not a checklist. The set is: a recipe/item viewer (MANDATORY — see below), a minimap and a world map (Xaero's Minimap and Xaero's World Map), AppleSkin (food and saturation tooltips), Controlling (searchable keybinds), an inventory sorting mod, Mouse Tweaks, and a loader-appropriate performance stack that is compatible with content mods (on Fabric or Quilt: Sodium, plus Indium whenever the pack needs the Fabric Rendering API, plus Lithium, FerriteCore, and Entity Culling; on Forge or NeoForge the equivalents such as Embeddium or Rubidium, FerriteCore, and an entity-culling mod). Never use OptiFine, which breaks content mods. A recipe/item viewer is NOT optional and is NOT subject to the player declining the QoL set: EVERY pack that contains any crafting or machine content mod MUST include one, because without it the player literally cannot discover recipes (tech mods like Modern Industrialization, Tech Reborn, Create, AE2 are unusable without it). Always include EMI (the most broadly compatible viewer and the one tech mods explicitly recommend); JEI or REI are acceptable only if EMI has no compatible build for this version/loader. Search_mods for it and include it even if the player declined everything else. Mod names change between versions and loaders, so search_mods for the current mod that fills each role for THIS version and loader (for example the modern inventory-sorting mod is not the legacy 1.12 "Inventory Tweaks"); include only ones that actually exist and are compatible, skip any OTHER role with no good option for this version (but never skip the recipe viewer), and tell the player exactly which QoL mods you added. If the player signals weak or low-end hardware or a laptop, include the performance stack regardless and say so plainly.
 - Keep seed_from_pack natural. If the player points at an existing pack or asks for something like a known pack, use seed_from_pack to ground the build on a real pack, then adapt it with search_mods rather than copying it wholesale.
-- Be efficient with tools and converge decisively. In a single turn, issue several search_mods or get_mod calls together rather than one at a time. Do not search endlessly or narrate every step. Size the pack to the request: a focused pack is roughly 15 to 35 mods; a kitchen-sink or "as many as possible" request can be larger, but it is a curated set of quality mods, not a race to a number. Once you have a coherent set that covers the player's theme well, stop searching and call assemble_pack (it resolves deps + repins versions and ALWAYS builds; the verify boot, not a static check, decides if it works). Do not keep searching to inflate the count, and do not re-assemble repeatedly chasing a bigger number; if the player asks for more after seeing a pack, add a few specific quality mods and re-assemble once. You have a hard limit on tool rounds, so converge and assemble well before you reach it; a good assembled pack now beats a perfect one that never finishes.
+- Be efficient with tools and converge decisively. In a single turn, issue several search_mods or get_mod calls together rather than one at a time. Do not search endlessly or narrate every step. Size the pack to the request: a focused pack is roughly 15 to 35 mods; a kitchen-sink or "as many as possible" request can be larger, but it is a curated set of quality mods, not a race to a number. Once you have a coherent set that covers the player's theme well, stop searching and call assemble_pack (it resolves deps + repins versions and ALWAYS builds). Do not keep searching to inflate the count, and do not re-assemble repeatedly chasing a bigger number; if the player asks for more after seeing a pack, add a few specific quality mods and re-assemble once. You have a hard limit on tool rounds, so converge and assemble well before you reach it; a good assembled pack now beats a perfect one that never finishes.
 - Iterating is expected and good. The player may keep talking after a pack is assembled and ask for changes. Treat that as normal. For a focused change to an already-assembled pack — add a mod, remove a mod, swap one for another — call edit_pack with the ACTIVE PACK STATE instance id and only the delta (add:[{project_id}], remove:[project_id]); it pulls required deps, blocks conflicts, refuses an unsafe removal with the requiring mods named (then also remove those if the player insists), and keeps every other mod's exact version. Obey edit_pack's recoverable refusal/conflict messages exactly, then call it again. Once a pack is assembled, edit_pack is the ONLY way to change its mods — assemble_pack is not available after assembly. A genuinely separate, brand-new pack means a new chat.
 
 Voice: concise and warm. No purple prose. No em dashes. Plain sentences, short paragraphs."#;
@@ -123,20 +117,25 @@ Voice: concise and warm. No purple prose. No em dashes. Plain sentences, short p
 /// FACET of it — there is no separate recipe tool) + query_registry + get_mod.
 const PROGRESSION_SYSTEM_PROMPT: &str = r#"You are Anvil, designing the PROGRESSION for an already-assembled Minecraft modpack: one graph of quests, some of which also carry custom recipes that bridge the mods. Be concise and warm; plain sentences, short paragraphs, no em dashes.
 
-GROUNDING. Before you reference ANY concrete id (item, entity, advancement, structure, biome, tag, recipe) in a quest or recipe, call query_registry to confirm it actually exists in THIS pack's real registry, scanned from the resolved mod jars. Do not recall ids from memory and do not invent them: a fabricated id (for example a mod boss entity that mod does not actually register) is rejected by generate_quests. Query the registry first for each mod you build an arc around, then design only against the ids it returns. If query_registry reports a mod's jar is not on disk yet, its ids cannot be verified now and will be accepted only low-confidence (and flagged) — prefer ids the tool confirms.
+GROUNDING. Before you reference ANY concrete id (item, entity, advancement, structure, biome, tag, recipe) in a quest or recipe, call query_registry to confirm it actually exists in THIS pack's real registry, scanned from the resolved mod jars. Do not recall ids from memory and do not invent them: a fabricated id (for example a mod boss entity that mod does not actually register) is rejected by generate_quests. Query the registry first for each mod you build an arc around, then design only against the ids it returns. If query_registry reports a mod's jar is not on disk yet, its ids cannot be verified now and will be accepted only low-confidence (and flagged) — prefer ids the tool confirms. The ids in the WORKED EXAMPLES below (create:andesite_alloy, thermal:machine_frame, minecraft:wither_skeleton, etc.) are ILLUSTRATIVE only: never copy them into a real pack — ground every id you actually use via query_registry first.
 
-ORIGINS. If the assembled pack runs Origins, a CUSTOM ORIGINS block appears later in this system prompt (it is present ONLY when the pack has Origins). When it is present, call generate_origins ONCE, after your first generate_quests batch, with a small bespoke set of 2 to 5 origins themed to THIS pack and the player's request — a tech pack gets an Engineer, a magic pack an Arcanist, a combat pack a Berserker; never generic filler. Follow that block's rules and SAFE power list exactly; if generate_origins returns issues, fix exactly those and call it again with the full corrected set. If that block is absent, the pack has no Origins — do not call generate_origins.
+ORIGINS. If the assembled pack runs Origins core + open-loader, USE `generate_origin_intents` (the typed PerkIntent mechanics path) — NOT the fallback `generate_origins_raw_apoli`. BEFORE you call generate_origin_intents, ASK THE PLAYER for the AVERAGE density of the set: light (3-4 perks, no toggle), standard (5-7 + 1 toggle, the Origins-default feel), or rich (8-10 + 1 toggle + 1 lifetime). In the same question, offer per-origin variation — e.g. "the starter Fresher could be light while the end-game Porter is rich, averaging to standard". Wait for their answer before calling the tool; never silently default. The intent surface gives you closed-set, mod-grounded, density-validated MECHANICS — not generic filler. Author origins whose perks actually use THIS pack's mods: a Bewitchment+Graveyard pack gets a Witch with AttributeBuff gated by BlockInRadius(bewitchment:witch_cauldron) AND a DotWhen-And[Daytime, ExposedToSky] daylight-burn (cursed); a cold-biome pack gets a Frost Form with BuffWhen(speed multiply -0.3) gated by BiomeTag(c:is_cold); a combat pack gets a Berserker with StaggerOnSprint(slowness) AND LastStand(hp<=4, 4s, [resistance, strength]); a magic pack with cold biomes and undead gets a Vampire with daylight burn, EntityGlow on the undead, and a TallyMilestone(50 undead killed -> permanent 2x damage to undead) scoreboard-gated unlock. The full PerkIntent catalog (40+ variants) is your authoring surface in the CUSTOM ORIGIN INTENTS block. Per-origin densities must average within ±0.6 of the user's chosen average or the batch is rejected. Do NOT give one origin two perks that modify the SAME attribute (e.g. a +6 and a -4 generic.max_health) — they contradict and the validator rejects the origin; choose ONE net effect per attribute. `generate_origins_raw_apoli` is a LAST-RESORT FALLBACK — use it ONLY if the typed catalog literally cannot express what you need (very rare; if you think you need it, you almost certainly don't — extend the request to fit a PerkIntent instead). If issues are returned, fix EXACTLY them and call again with the full corrected set. If the pack lacks Origins core or open-loader, do not call either tool.
 
-QUESTS. The quest system is Heracles (on Modrinth as "Odyssey Quests"); the pack is 1.20.1 fabric/forge with odyssey-quests + resourceful-lib already in it. Design quests to the standard of a real kitchen-sink pack (All the Mods, Create: Above and Beyond): a deep, interconnected progression web, not a flat list.
+QUESTS. The quest system is Heracles (on Modrinth as "Odyssey Quests"); the pack is 1.20.1 Fabric with odyssey-quests + resourceful-lib already in it. Design quests to the standard of a real kitchen-sink pack (All the Mods, Create: Above and Beyond): a deep, interconnected progression web, not a flat list.
 
 - Chapters are progression tiers/themes: a small "Getting Started" hub, then one themed questline per MAJOR mod actually in the pack, then a milestone/endgame chapter whose quests converge several mod chapters. Kitchen-sink ~6 to 10 chapters / 40 to 80 quests; smaller for focused packs but still tiered.
 - Dependencies are the backbone: almost every quest has a prerequisite; use convergence, gating (a quest's reward is the next quest's needed item), and cross-chapter edges; at most one root quest per chapter; keep it a DAG.
 - Per quest: an evocative title, a 1 to 3 sentence description with flavor and concrete how-to, escalating tasks (vary types: item, kill, advancement, biome, dimension, structure, recipe, occasional checkmark), and useful rewards. Invent cross-mod integration quests. Difficulty is tiered T1-T5 and ENFORCED every call. Chapter 1 holds BOTH T1 and T2 (onboarding ramp); every later chapter is T3+ (never T1/T2 again), the ceiling rising gradually to T5 by the final chapter scaled to chapter count (ch2 ~ T3, middle ramps to T4, final may use T5). No hard advancements in ch1 (adventuring_time/all-biomes T5, netherite T4, End T4+); no trivial T1/T2 task past ch1. generate_quests rejects over-hard tasks (OverdifficultForChapter) and too-trivial late tasks (UnderdifficultForChapter); retier the task or move the quest.
 - Build it with multiple generate_quests calls, one to three chapters per call in progression order; calls accumulate (same chapter id replaces, new ones append; deps may reference earlier-saved quests). Hard errors (unknown ids, missing deps, cycles) are checked every call; the sparse/orphan/disconnected quality gate runs only when you pass "final": true on the last call. Only reference items/entities/advancements from mods actually in the pack. If a call returns issues, fix and call again. Lay nodes on a grid: x = progression tier, y = parallel branch, about 2.0 units apart.
 
+PER-ORIGIN PATHS (only when the pack runs Origins core + open-loader AND you authored origins). Build the graph in TWO tiers. (1) A MAIN questline every player walks regardless of origin — the spine described above; NOTHING in it may depend on an origin, so every player can finish the shared story. (2) OPTIONAL per-origin side branches that only the matching origin can complete, hanging off the spine and converging back into nothing (the main line never depends on them). This gives each origin its own flavour without forking the shared story or stranding anyone.
+- Wire each branch: give the matching origin an `origin_questline` perk (chapter_seed = one short theme word) in generate_origin_intents. Its result prints a SEED ADVANCEMENT id per such origin (e.g. anvil:origins/o05_the_witch/seed_arcane). Author the branch as its OWN chapter whose ENTRY quest has BOTH (a) a dep on a main-spine quest (the branch-off point — every chapter past the first needs one cross-chapter edge or it is rejected as disconnected) AND (b) an `advancement` task with that EXACT seed id. Only that origin's players earn the seed, so only they clear the entry; everyone else sees the branch but cannot progress it.
+- Each branch needs at least 2 quests (a single-quest branch is an orphan and rejected). Write the entry description so a non-matching player understands the gate, e.g. "Witch path. Your origin opens this; other origins cannot complete it." Keep branches OPTIONAL: never let a main-spine quest depend on a branch quest.
+- ORDER MATTERS: call generate_origin_intents (with the origin_questline perks) BEFORE the generate_quests call that references the seed. Copy the seed id VERBATIM from the origins result — do not reconstruct the slug. If a quest gates on a seed no origin emits, generate_quests blocks the write (that branch would never unlock for anyone).
+
 RECIPE-BRIDGE NODES. Recipes are not a separate system: a quest NODE may carry a "recipes" array. Such a node becomes a quest to OBTAIN the bridged item AND injects that custom 1.20.1 recipe into an Open Loader datapack. This is what makes a kitchen-sink pack feel "expert": the questline narrates the tier gate, the embedded recipe makes the shortcut un-craftable so the player must walk the spine. Use these heavily on tech/skyblock packs and to gate a mod chapter behind another mod's output.
 
-- The pack MUST contain open-loader (Modrinth slug open-loader; 1.20.1 fabric/forge) if ANY node has recipes; if it does not, generate_quests returns a recoverable add-open-loader message — tell the player, add it, re-assemble, retry.
+- The pack MUST contain open-loader (Modrinth slug open-loader; 1.20.1 Fabric) if ANY node has recipes; if it does not, generate_quests returns a recoverable add-open-loader message: tell the player, add it, re-assemble, retry.
 - A recipe-bridge node is just a node with a "recipes" array: give it a title/lore/deps/rewards/x/y and the recipes; do NOT also give it "tasks" (the quest auto-gets an item task on the FIRST recipe's result for you), and NEVER supply a recipe "id" (it is derived and Anvil-authored).
 - Every recipe must BRIDGE mods: a modded item on at least one side. Vanilla-input to modded-output is a good bridge; modded-input to vanilla-output is fine; a pure vanilla-to-vanilla recipe is rejected as an orphan. Use deps so the bridge becomes available only after the prerequisite mod's chapter, and reward/result-gate so a downstream chapter's root needs the bridged item.
 - Batch exactly like quests (recipes ride inside generate_quests): hard checks (grounding to the real registry, structural validity, no duplicate derived ids) run every call; the orphan / no-modded-output quality gate runs only on the final call. Fix and call again if a call returns issues.
@@ -156,16 +155,37 @@ WORKED CONTENT-BOSS EXAMPLE. A Chapter-8 climax — the chapter's terminal node,
 {"id":"climax_void_sovereign","title":"Eternax, the Void Sovereign","description":"The rift tears open. Assemble the summoning altar, then end the Void Sovereign before it ends you. Tear the Void Heart from its corpse.","x":16.0,"y":0.0,"deps":["forge_void_armor","gather_rift_shards"],"rewards":[{"type":"xp","amount":1000}],"content":{"kind":"boss","entity":"minecraft:wither_skeleton","display_name":"Eternax, the Void Sovereign","attributes":{"max_health":400,"attack_damage":22,"armor":18},"equipment":{"mainhand":"minecraft:netherite_sword","helmet":"minecraft:netherite_helmet"},"bossbar_color":"purple","token_item":"minecraft:nether_star","token_name":"Void Heart","trigger":"totem"}}
 Note: a buffed registered entity named "Eternax, the Void Sovereign" with a purple bossbar; killing it drops a "Void Heart" (a nether star carrying a unique token NBT); the node auto-becomes the quest to obtain the Void Heart; no "tasks", no ids beyond the grounded entity/equipment/token_item; "trigger":"totem" makes an ALTAR — the player drops a nether star plus this boss's auto-assigned offering block together to summon it (write the quest lore as assembling/activating an altar or shrine, NOT "craft an item")."#;
 
-/// Complete-phase prompt: progression is done; light touch for tweaks.
-const COMPLETE_SYSTEM_PROMPT: &str = r#"You are Anvil. This pack's progression is complete: one quest graph, some nodes also carrying custom recipe bridges or provisioned content bosses. Be concise and warm. If the player wants changes, make focused edits with generate_quests (recipes and content bosses live on quest nodes — no separate tool; a climax/boss/defeat beat is always a content boss node, never a manual checkmark; calls accumulate; pass "final": true after the last edit to re-run the full quality check). Otherwise confirm what is built and where it lives."#;
+/// Iterating-phase prompt: the initial progression pass is done; the player
+/// is now freely refining mods AND content. Everything is available except
+/// propose_pack / assemble_pack / seed_from_pack — those are fresh-start
+/// tools and unavailable once a pack exists.
+const ITERATING_SYSTEM_PROMPT: &str = r#"You are Anvil. This pack is built, verified, and its initial progression is done. The player is now ITERATING — playing the pack, and making focused changes to mods, quests, or origins, asking questions, confirming details. Be concise and warm; plain sentences, short paragraphs, no em dashes.
+
+PLAY HANDOFF. When you first enter this state (initial progression just finished), tell the player the pack is ready to launch and play, and ask them to let you know if it crashes — especially when CREATING or LOADING a world (the boot check confirms it reaches the menu, but it does not create a world for them). You are their safety net for in-game crashes.
+
+CRASH REPORTS. When the player reports a crash (world creation, world load, or in-game), call diagnose_crash with the instance id FIRST. Do NOT read the crash yourself, do NOT guess a mod from its name appearing in the log, and do NOT start removing mods on a hunch. diagnose_crash runs the deterministic, jar-grounded analysis and names the real culprit + the fix; follow it, apply it with edit_pack (repin the named mod/dependency first, remove only as a last resort), tell the player exactly what changed, and ask them to re-launch and confirm. If diagnose_crash says no crash is on disk, ask them to paste the crash text and call it again with crash_text.
+
+Available tools (everything except propose_pack and assemble_pack — those spawn a fresh instance, which means a new chat):
+- diagnose_crash: deterministic culprit + fix for a crash the player hit while playing. ALWAYS use this for a reported crash instead of eyeballing the log.
+- edit_pack: add / remove / swap mods on the live instance. Always pass ONLY the delta (add:[{project_id}], remove:[project_id]); never re-list every mod. Obey its recoverable refusal/conflict messages and call again. After a mod change call verify_pack to re-verify.
+- search_mods / get_mod: find or inspect a Modrinth project (use these to pick a replacement or check compatibility BEFORE calling edit_pack).
+- seed_from_pack: read an existing pack's mod list for inspiration when the player wants their pack to be "more like" another; then add the good ones with edit_pack. It does not change the pack by itself.
+- generate_quests: edit or extend the quest graph. Recipes and content bosses live on quest nodes — no separate tool; a climax/boss/defeat beat is ALWAYS a content boss node, never a manual checkmark. Calls accumulate; pass "final": true after the last edit to re-run the full quality check.
+- generate_origin_intents: PREFERRED path — update the origins set via typed PerkIntent mechanics (density-validated, mod-grounded, with companion mcfunctions). Pass the full corrected set when fixing returned issues.
+- generate_origins_raw_apoli: LAST-RESORT FALLBACK — only when the typed PerkIntent catalog cannot express the raw Apoli body you need.
+- query_registry: ground EVERY concrete id (item, entity, advancement, biome, tag, recipe) BEFORE referencing it in a quest, recipe, or origin. Never invent ids.
+- verify_pack: re-run after a mod change to confirm the pack still boots cleanly.
+
+Be honest about what you're changing and why. If the player just wants confirmation of what is built, give it without re-running tools."#;
 
 /// The system prompt for a phase. Curating/Assembled keep the full
-/// pack-building prompt (it covers refinement too); Progression/Complete are
-/// scoped down.
+/// pack-building prompt (it covers refinement too); Progression is scoped
+/// down to content authoring; Iterating is the post-progression "everything
+/// except fresh-start tools" mode.
 fn system_prompt_for(phase: &str) -> &'static str {
     match phase {
         "progression" => PROGRESSION_SYSTEM_PROMPT,
-        "complete" => COMPLETE_SYSTEM_PROMPT,
+        "iterating" => ITERATING_SYSTEM_PROMPT,
         _ => SYSTEM_PROMPT,
     }
 }
@@ -190,17 +210,40 @@ fn tool_specs_for(phase: &str) -> Value {
             "edit_pack",
             "search_mods",
             "get_mod",
+            "diagnose_crash",
         ],
-        // progression/complete = content authoring. verify_pack stays because
-        // generate_quests/origins WRITE datapacks that can themselves break
-        // world creation, so the generated content must be re-verified. No
-        // edit_pack/get_mod/search_mods: a mod change is a repair → it sends
-        // the thread back to `assembled`, it does not happen here.
-        "progression" | "complete" => &[
+        // progression = first-pass content authoring. verify_pack stays
+        // because generate_quests/origins WRITE datapacks that can themselves
+        // break world creation, so generated content must be re-verified. No
+        // edit_pack/get_mod/search_mods: a mod change here is a repair → it
+        // sends the thread back to `assembled`, not here.
+        "progression" => &[
             "generate_quests",
-            "generate_origins",
+            "generate_origin_intents",
+            "generate_origins_raw_apoli",
             "query_registry",
             "verify_pack",
+            "diagnose_crash",
+        ],
+        // iterating = post-initial-progression free refinement: EVERY tool
+        // EXCEPT the two fresh-start ones. The pack-editing tools
+        // (edit_pack/search_mods/get_mod/seed_from_pack), the content tools
+        // (generate_quests/generate_origins/query_registry), verify_pack, and
+        // diagnose_crash (the player is now PLAYING, so a world-creation /
+        // in-game crash they report is diagnosed deterministically here).
+        // Excluded ONLY: propose_pack / assemble_pack — spawning a fresh
+        // instance would mean a new chat, not an edit of this one.
+        "iterating" => &[
+            "edit_pack",
+            "search_mods",
+            "get_mod",
+            "seed_from_pack",
+            "query_registry",
+            "generate_quests",
+            "generate_origin_intents",
+            "generate_origins_raw_apoli",
+            "verify_pack",
+            "diagnose_crash",
         ],
         // curating (default): build the pack once. No validate_pack (built
         // into assemble_pack's refuse-on-blocking-issues).
@@ -303,10 +346,14 @@ fn active_pack_preamble(thread_id: Option<&str>) -> Option<String> {
              is paused until they answer.\n\
              When verify_pack returns VERIFIED the conversation automatically \
              advances and the quest/origin tools become available; only THEN \
-             call generate_quests / generate_origins with instance_id \
-             \"{iid}\". If the player asked for quests and the pack is not \
-             verified yet, your next tool call is verify_pack — never \
-             propose_pack or assemble_pack.",
+             call generate_quests / generate_origin_intents with instance_id \
+             \"{iid}\". For origins, generate_origin_intents is the PREFERRED \
+             typed-mechanics path — do NOT call the legacy fallback \
+             generate_origins_raw_apoli unless generate_origin_intents \
+             literally cannot express the perk shape you need (very rare). \
+             If the player asked for quests and the pack is not verified yet, \
+             your next tool call is verify_pack — never propose_pack or \
+             assemble_pack.",
             iid = iid,
             name = inst.name,
             mc = inst.mc_version,
@@ -406,10 +453,29 @@ pub async fn run_turn(
         // constants the validator gates on (so prompt and gate cannot drift)
         // and is only relevant while authoring progression. Static text →
         // its own durable cache block.
-        if matches!(phase, "progression" | "complete") {
+        if matches!(phase, "progression" | "iterating") {
+            // BOTH origin catalogs concatenated into a single cached block.
+            // Anthropic's API caps `cache_control` breakpoints at 4 per
+            // request; we use 1 for the main system prompt, 1 for the
+            // active-pack preamble, 1 here for the union of both origin
+            // catalogs, and the API auto-places the 4th on the trailing
+            // message. Splitting these two catalogs into separate blocks
+            // pushes the request to 5 breakpoints → API rejects with
+            // `A maximum of 4 blocks with cache_control may be provided.`
+            //
+            // The legacy raw-Apoli catalog stays available as the fallback
+            // path; the PREFERRED intent catalog (closed PerkIntent enum +
+            // density budgets + impressive-pattern templates) is what
+            // steers the LLM toward `generate_origin_intents` instead of
+            // the vanilla-archetype `generate_origins` filler-machine.
+            let combined = format!(
+                "{}\n\n{}",
+                crate::origins::intent_catalog_prompt_section(),
+                crate::origins::safe_catalog_prompt_section(),
+            );
             v.push(json!({
                 "type": "text",
-                "text": crate::origins::safe_catalog_prompt_section(),
+                "text": combined,
                 "cache_control": { "type": "ephemeral", "ttl": "1h" }
             }));
         }
@@ -979,6 +1045,18 @@ fn tool_specs() -> Value {
             }
         },
         {
+            "name": "diagnose_crash",
+            "description": "Diagnose a crash the player hit while PLAYING (world creation, world load, or in-game) and get the deterministic culprit + ordered fix. Runs the SAME grounded analysis the verify gate uses: it reads the newest crash report on disk for this instance (or a crash log you pass in crash_text), names the offending mod from the crash itself PLUS an installed-jar scan (not a guess), and returns the fix. Call this WHENEVER the player reports a crash after launching the pack: do NOT read the crash yourself and do NOT guess a mod from memory. After it returns, apply the fix with edit_pack (repin the named mod/dependency first, remove only as a last resort), then tell the player exactly what changed and to re-launch and confirm. If it reports no crash found, ask the player to paste the crash text and call again with crash_text.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "instance_id": { "type": "string", "description": "The id of the instance the player is playing (from ACTIVE PACK STATE)." },
+                    "crash_text": { "type": "string", "description": "Optional. The crash log text, if the player pasted it. Omit to use the newest crash report on disk for this instance." }
+                },
+                "required": ["instance_id"]
+            }
+        },
+        {
             "name": "seed_from_pack",
             "description": "Ground the build on a real existing modpack. Searches Modrinth modpacks for the query, takes the top hit, and reads its newest .mrpack manifest. Returns the pack name, Minecraft version, loader, loader version, mod count, and a capped list of its mods (name and download url). Use this when the player references an existing pack or wants something like a known pack, then adapt with search_mods. The returned mods are a starting point, not a final pack: still resolve real Modrinth ids with search_mods and get_mod, and still validate before assembling.",
             "input_schema": {
@@ -991,7 +1069,7 @@ fn tool_specs() -> Value {
         },
         {
             "name": "generate_quests",
-            "description": "Append a batch of progression chapters to an assembled instance (Heracles / Odyssey Quests, config/heracles/quests JSON). The instance should be Minecraft 1.20.1 fabric/forge and contain odyssey-quests + resourceful-lib. A node may ALSO carry a 'recipes' facet (custom 1.20.1 recipes that bridge the pinned mods: such a node becomes a quest to obtain the bridged item) OR a 'content' facet (a provisioned boss: a real summoned, named, bossbar boss built from a registered entity that drops a unique quest token — such a node becomes the encounter quest, auto-tasked to obtain that token). Both facets inject an Open Loader datapack (the pack MUST contain open-loader if ANY node has recipes OR content; if not, this returns a recoverable add-open-loader message). There is no separate recipe/content tool — recipes and bosses ARE quest nodes. A climax / boss / 'defeat the <X>' / chapter-final milestone MUST be a content boss node, NOT a manual checkmark. Build across SEVERAL calls — roughly one to three chapters per call, in progression order — rather than one massive call (a large graph will not fit in one reply). Calls accumulate: a chapter id that already exists is replaced, new chapters are appended, dependencies may reference quests saved by earlier calls. Every call enforces hard correctness: a DAG (deps form no cycles and every dep resolves), tasks/rewards referencing only ids real in the pack, per-recipe grounding + structural validity + no duplicate derived ids, and content TOKEN ATOMICITY (a content boss's base entity/equipment/token grounded, and the full atomic boss set emittable — checked every call). The quality gate (no orphan quests, every chapter wired in, deep All-the-Mods-style web; no orphan recipes; the datapack produces at least one modded output) runs ONLY when you pass \"final\": true on the last call. On failure nothing in that call is written and the issues are returned; fix and call again.",
+            "description": "Append a batch of progression chapters to an assembled instance (Heracles / Odyssey Quests, config/heracles/quests JSON). The instance should be Minecraft 1.20.1 Fabric and contain odyssey-quests + resourceful-lib. A node may ALSO carry a 'recipes' facet (custom 1.20.1 recipes that bridge the pinned mods: such a node becomes a quest to obtain the bridged item) OR a 'content' facet (a provisioned boss: a real summoned, named, bossbar boss built from a registered entity that drops a unique quest token — such a node becomes the encounter quest, auto-tasked to obtain that token). Both facets inject an Open Loader datapack (the pack MUST contain open-loader if ANY node has recipes OR content; if not, this returns a recoverable add-open-loader message). There is no separate recipe/content tool — recipes and bosses ARE quest nodes. A climax / boss / 'defeat the <X>' / chapter-final milestone MUST be a content boss node, NOT a manual checkmark. Build across SEVERAL calls — roughly one to three chapters per call, in progression order — rather than one massive call (a large graph will not fit in one reply). Calls accumulate: a chapter id that already exists is replaced, new chapters are appended, dependencies may reference quests saved by earlier calls. Every call enforces hard correctness: a DAG (deps form no cycles and every dep resolves), tasks/rewards referencing only ids real in the pack, per-recipe grounding + structural validity + no duplicate derived ids, and content TOKEN ATOMICITY (a content boss's base entity/equipment/token grounded, and the full atomic boss set emittable — checked every call). The quality gate (no orphan quests, every chapter wired in, deep All-the-Mods-style web; no orphan recipes; the datapack produces at least one modded output) runs ONLY when you pass \"final\": true on the last call. On failure nothing in that call is written and the issues are returned; fix and call again.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1150,8 +1228,8 @@ fn tool_specs() -> Value {
             }
         },
         {
-            "name": "generate_origins",
-            "description": "Author the pack's CUSTOM ORIGINS (Origins/Apoli datapack) — only if the assembled instance runs Origins core + Open Loader. Design 2-5 origins themed to THIS pack and the player's request (a tech pack gets an Engineer, a magic pack an Arcanist, etc.). This is a SINGLE authored set: calling again REPLACES the whole set (it does NOT accumulate like generate_quests). The proposal is hard-validated against the in-code Apoli catalog before anything is written; on failure NOTHING is written and a structured list of {kind, where, why, hint} is returned — fix exactly those and call again. Follow the CUSTOM ORIGINS rules and the SAFE power-type list in the system prompt verbatim: name/description are plain strings, impact is an integer 0-3, powers are either ids you define here or shipped origins:<id> references (never redefine a shipped power).",
+            "name": "generate_origins_raw_apoli",
+            "description": "LAST-RESORT FALLBACK. PREFER `generate_origin_intents` for ANY normal origin authoring — it gives you density-validated mechanics, mod-grounded ids, real companion mcfunctions, and impressive-pattern templates. Only use THIS tool if the typed PerkIntent catalog literally cannot express the Apoli power body you need (a one-off raw factory field combination that has no intent counterpart). Even then, prefer extending the intent catalog over reaching here. Same gate as before: pack must run Origins core + Open Loader; authors a SINGLE set (calling again REPLACES); validated against the in-code Apoli SAFE catalog; on failure NOTHING is written. name/description are plain strings; impact 0-3; powers are local ids or shipped origins:<id>. Do not use for: routine archetype design, anything expressible via PerkIntent variants, anything that would benefit from companion mcfunctions or density-budget validation.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -1201,6 +1279,47 @@ fn tool_specs() -> Value {
                     }
                 },
                 "required": ["instance_id", "origins"]
+            }
+        },
+        {
+            "name": "generate_origin_intents",
+            "description": "PREFERRED PATH for Origins authoring. Surfaces the closed PerkIntent enum so you can author MECHANICS, not raw Apoli body JSON. BEFORE CALLING: ASK the player for the AVERAGE density they want (light = 3-4 perks, no toggle; standard = 5-7 + 1 toggle; rich = 8-10 + 1 toggle + 1 lifetime) and confirm whether per-origin variation is wanted (e.g. lighter starter origins, heavier end-game ones). Then call with `density` = the user's chosen AVERAGE plus optional per-origin `density` overrides; the batch validator rejects if the per-origin average strays >0.6 from the user's pick. You get gameplay-driver intents (ComboChain, Siphon, DodgeRoll, VeinMine, HarvestAoe, LastStand, BlockPhase, StaggerOnSprint), compound when-conditions (BiomeTag, BlockInRadius proximity gating, And/Or composition for vampire daylight burn = DotWhen with And[Daytime, ExposedToSky]), TallyMilestone with scoreboard-gated unlocks, OncePerDayBonus, mod-integrated intents (Familiar, SignatureTrinket, ApprenticeToNpc, BrewPotency, Gravewalker, etc.). Pipeline: per-intent check (density-budget + mod-capability + registry grounding) → batch-average check (deviation ≤0.6) → emit_perk compiles each PerkIntent to Apoli powers + companion mcfunctions → validate(OriginsSet) → write datapack with tick.json/load.json tags. On any issue NOTHING is written. See CUSTOM ORIGIN INTENTS in the system prompt for the variant catalog + example shapes.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "instance_id": { "type": "string", "description": "The assembled instance id." },
+                    "density": {
+                        "type": "string",
+                        "enum": ["light", "standard", "rich"],
+                        "description": "The AVERAGE density the player chose for this set (ASK them before calling — never pick silently). light = 3-4 passives, no actives, no lifetimes; standard = 5-7 passives + 1 active + 0-1 lifetime (the Origins-default feel); rich = 8-10 passives + 1 active + 1 lifetime. Individual origins may override via per-origin `density` to deviate around this average, but the per-origin mean must land within ±0.6 of this value or the batch is rejected."
+                    },
+                    "origins": {
+                        "type": "array",
+                        "description": "2-5 OriginIntent objects, each with theme/name/description/icon/perks. Perks are tagged PerkIntent objects ({intent: \"...\", ...variant fields}).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "theme": { "type": "string", "description": "One of: arcane, cozy, cursed, adventure, tech, …" },
+                                "name": { "type": "string", "description": "PLAIN display name." },
+                                "description": { "type": "string", "description": "PLAIN 1-3 sentence flavour." },
+                                "icon": { "type": "string", "description": "Real item id (ns:path), e.g. bewitchment:athame." },
+                                "perks": {
+                                    "type": "array",
+                                    "description": "Each perk is a PerkIntent object. Required field `intent` selects the variant; other fields depend on it. See the CUSTOM ORIGIN INTENTS block in the system prompt for every variant's shape."
+                                },
+                                "density": {
+                                    "type": "string",
+                                    "enum": ["light", "standard", "rich"],
+                                    "description": "Optional per-origin density override. Use to deviate around the batch AVERAGE — e.g. a Fresher might be `light` while a Porter is `rich` within a `standard`-average batch. Omit to inherit the batch density. Per-origin scores must average within ±0.6 of the batch density."
+                                },
+                                "linked_boss": { "type": "string", "description": "Optional ContentHexRef linking this origin to a quest-node climax boss." },
+                                "gates_quest": { "type": "string", "description": "Optional quest ref this origin unlocks at chargen." }
+                            },
+                            "required": ["theme", "name", "description", "icon", "perks"]
+                        }
+                    }
+                },
+                "required": ["instance_id", "density", "origins"]
             }
         },
         {
@@ -1340,11 +1459,15 @@ async fn execute_tool(
         "generate_quests" => {
             tool_generate_quests(mr, thread_id, input, tx).await
         }
-        "generate_origins" => {
-            tool_generate_origins(mr, thread_id, input, tx).await
+        "generate_origins_raw_apoli" => {
+            tool_generate_origins_raw_apoli(mr, thread_id, input, tx).await
+        }
+        "generate_origin_intents" => {
+            tool_generate_origin_intents(mr, thread_id, input, tx).await
         }
         "query_registry" => tool_query_registry(input, tx).await,
         "verify_pack" => tool_verify_pack(mr, input, tx).await,
+        "diagnose_crash" => tool_diagnose_crash(input, tx).await,
         other => Err(anyhow!("unknown tool: {other}")),
     }
 }
@@ -1372,6 +1495,32 @@ fn opt_str_field<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
         .get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
+}
+
+/// A tool-input field as a JSON array, TOLERATING the model passing it as a
+/// stringified JSON array (`"[{...}]"`). Without this, `edit_pack`'s
+/// `.as_array()` returned `None` for a stringified `add`, so the whole batch was
+/// silently dropped ("nothing to do") — the curator believed it had repinned,
+/// kept failing, and escalated to deleting content. Returns the parsed array, or
+/// empty when the field is absent/null/uncoercible.
+fn array_field(input: &Value, key: &str) -> Vec<Value> {
+    match input.get(key) {
+        Some(Value::Array(a)) => a.clone(),
+        Some(Value::String(s)) => serde_json::from_str::<Value>(s)
+            .ok()
+            .and_then(|v| match v {
+                Value::Array(a) => Some(a),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// True iff a field is present and non-null (so we can tell "you sent a
+/// malformed `add`" apart from "you sent no `add`").
+fn field_present(input: &Value, key: &str) -> bool {
+    input.get(key).map(|v| !v.is_null()).unwrap_or(false)
 }
 
 /// Map the friendly loader name to the Modrinth dependency key used in
@@ -1942,6 +2091,31 @@ async fn fetch_jar_cached(
 /// Returns new roots to fold back into the fixpoint, plus issues for jar
 /// requirements that resolve to no Modrinth project / no compatible version.
 #[allow(clippy::too_many_arguments)]
+/// Layer-4: a few mods hard-need a library they declare in NO manifest
+/// (Modrinth deps, jar `depends`, OR JIJ) — invisible to every metadata
+/// layer Anvil reads. (trigger fabric modid, companion fabric modid,
+/// companion Modrinth slug). Only SATISFIABLE companions belong here
+/// (Porting Lib IS on Modrinth); the unsatisfiable class — owo-lib →
+/// Server Translations API, which is GitHub/CurseForge-only — is left to
+/// the post-crash grounded diagnosis (it has no Modrinth answer to pin).
+/// Fabric-only (Anvil v1): the Fabric `farmersdelight` on Modrinth IS the
+/// Refabricated build, which hard-needs Porting Lib at `onInitialize`.
+const MOD_NEEDS: &[(&str, &str, &str)] =
+    &[("farmersdelight", "porting_lib", "porting-lib")];
+
+/// Companion slugs to pre-inject: a trigger modid is in the closure but its
+/// undeclared companion modid is not yet provided. Pure (testable); the
+/// driver feeds the result through the SAME resolve path as a real dep.
+fn missing_companions(
+    provided: &std::collections::HashSet<String>,
+) -> Vec<&'static str> {
+    MOD_NEEDS
+        .iter()
+        .filter(|(t, c, _)| provided.contains(*t) && !provided.contains(*c))
+        .map(|(_, _, slug)| *slug)
+        .collect()
+}
+
 async fn jar_augment(
     mr: &Modrinth,
     client: &reqwest::Client,
@@ -1978,6 +2152,16 @@ async fn jar_augment(
         }
         // Keep the parsed manifest for Tier 2 (avoids re-reading jars).
         manifests.insert(e.project_id.clone(), man);
+    }
+
+    // Layer-4 PREVENTION: pin the known undeclared companion BEFORE the boot
+    // (resolved by step 2 exactly like a real declared dep) so the pack never
+    // reaches the entrypoint NoClassDefFoundError that fix-5 grounding would
+    // otherwise only catch AFTER a crash + a repair round. Idempotent across
+    // the fixpoint: once the companion's jar is parsed its real modid enters
+    // `provided`, so it is no longer "missing" and is not re-injected.
+    for slug in missing_companions(&*provided) {
+        requires.push(("layer4-companion".to_string(), slug.to_string()));
     }
 
     // 2. A required modid the closure does not provide is a real miss Fabric
@@ -2237,7 +2421,24 @@ async fn edit_instance_mods_with_state(
                 return false;
             }
             let rl = r.to_lowercase();
-            m.project_id == r || stem == rl || stem.starts_with(&(rl + "-"))
+            // Modrinth jar filenames do NOT always lead with the slug: Let's Do
+            // mods ship `letsdo-vinery-fabric-1.4.13.jar`, so `starts_with
+            // "vinery-"` misses and `remove ["vinery"]` was a silent no-op while
+            // the mod stayed (and kept crashing). Also match the slug as a
+            // delimiter-separated TOKEN of the jar stem — exact token, never a
+            // substring, and never a loader word — so `vinery` matches
+            // `letsdo-vinery-fabric` without `ery` matching `vinery`.
+            const LOADER_WORDS: &[&str] =
+                &["fabric", "forge", "quilt", "neoforge"];
+            let token_hit = rl.len() >= 3
+                && !LOADER_WORDS.contains(&rl.as_str())
+                && stem
+                    .split(|c| c == '-' || c == '_' || c == '+' || c == '.')
+                    .any(|t| t == rl);
+            m.project_id == r
+                || stem == rl
+                || stem.starts_with(&(rl.clone() + "-"))
+                || token_hit
         });
         if hit {
             removed.push(
@@ -2399,6 +2600,18 @@ async fn edit_instance_mods_with_state(
             entries.push(rv.to_entry());
             pulled_deps.push(pid.clone());
         }
+    }
+
+    // Collapse duplicate-modid entries. A prior assemble/edit could leave two
+    // jars with the same project_id (seen live: fabric-api ×2, PuzzlesLib ×2) —
+    // Fabric refuses to launch on a duplicate modid and a .mrpack export of the
+    // dup set is broken. Keep the FIRST: the explicit-add repins the first match
+    // in place, so a fresh repin is preserved over a stale duplicate. This also
+    // makes editing a dup-laden instance self-heal (the deduped set differs from
+    // the old mods, so it is NOT a no-op and gets written).
+    {
+        let mut seen: HashSet<String> = HashSet::new();
+        entries.retain(|e| seen.insert(e.project_id.clone()));
     }
 
     // noop: identical (project_id, version_id) multiset AND identical roots.
@@ -3033,46 +3246,17 @@ async fn tool_propose_pack(
 /// CURRENT pins (re-dumping that is wasted work). `edit_pack` deletes the
 /// cache first, so after an edit this always runs.
 pub(crate) fn spawn_registry_dump_detached(
-    id: String,
-    inst: Instance,
-    mr: Modrinth, // `Modrinth: Clone`; a borrow cannot cross the spawn
+    _id: String,
+    _inst: Instance,
+    _mr: Modrinth,
 ) {
-    tokio::spawn(async move {
-        let cache_path = instance_dir(&id).join("anvil-registry.json");
-        let key = crate::registry::mod_set_key(&inst);
-        // Gate read. Parse failure / absent => run (no usable cache). A
-        // matching DumpReconciled cache => skip.
-        if let Ok(txt) = std::fs::read_to_string(&cache_path) {
-            if let Ok(c) =
-                serde_json::from_str::<crate::registry::ScanResult>(&txt)
-            {
-                if c.mod_set_key == key
-                    && c.source == crate::registry::ScanSource::DumpReconciled
-                {
-                    return; // already reconciled for these pins.
-                }
-            }
-        }
-
-        // No AppHandle here (detached): a throwaway LaunchEvent channel whose
-        // receiver is dropped — sends fail silently, which is fine (progress
-        // is non-essential for a background pass).
-        let (ltx, lrx) = tokio::sync::mpsc::unbounded_channel::<
-            crate::launch::LaunchEvent,
-        >();
-        drop(lrx);
-
-        // Detached/background: wait_for_jvm=false (skip on JVM contention —
-        // the next assemble/edit re-triggers). Only a real Dumped verdict
-        // rewrites the cache; every other verdict leaves the static scan in
-        // place exactly as before (the gate, not this pass, is what BLOCKS).
-        match crate::launch::registry_dump_pass(&inst, &mr, false, ltx).await {
-            Ok(crate::launch::DumpOutcome::Dumped(dump_dir)) => {
-                reconcile_dump_into_cache(&inst, &id, &dump_dir);
-            }
-            _ => return,
-        }
-    });
+    // DISABLED 2026-05-19: the bootless dedicated-server dump crashes in
+    // macOS dyld during LWJGL stb load on this host. While Stage 2 is off
+    // in `verify_gate`, this detached pass is a no-op too; the static
+    // jar scan remains the grounding source. The previous body (gate-read
+    // + tokio::spawn + registry_dump_pass + reconcile_dump_into_cache) is
+    // preserved in git history; re-enable by restoring it AND lifting the
+    // disable in `verify_gate` (the matching commented block).
 }
 
 /// Reconcile the CURRENT static scan with a live `/dump registry` dir, then
@@ -3121,7 +3305,11 @@ fn repair_contract(instance_id: &str) -> String {
         "\n\nHOW TO FIX — do this now with edit_pack on instance \
          \"{id}\" (allowed in this phase; do NOT ask permission for a repin \
          or dep-add, do NOT narrate around this, do NOT reassemble from \
-         scratch). Try in THIS order, re-running verify_pack after each:\n\
+         scratch). Where the message ABOVE names a specific mod and missing \
+         class, that came from the actual crash (the crash report plus an \
+         installed-jar scan), NOT a guess — trust it over any theory of your \
+         own about which mod is at fault. Try in THIS order, re-running \
+         verify_pack after each:\n\
          1. REPIN the named dependency to the required floor:\n\
          \x20  edit_pack {{\"instance_id\":\"{id}\",\"add\":[{{\"project_id\":\
          \"<dep id above>\",\"version_req\":\"<the >= range above>\"}}]}}\n\
@@ -3146,18 +3334,66 @@ fn repair_contract(instance_id: &str) -> String {
 // player answers (the model cannot narrate past a missing tool). Counters
 // live in a sidecar (transient; survives the mod_set_key change every repin
 // causes); a clean stage pass / fast-path resets the campaign.
+/// Escalate when the SAME failure signature recurs this many times (the
+/// curator tried to fix THIS issue, re-verified, and it came back identical
+/// → genuinely stuck on it).
 const STAGE_BUDGET: u32 = 2;
+/// Hard backstop: total attempts for a stage before escalating regardless of
+/// progress. Generous so a legit multi-issue pack (≈6-8 sequential distinct
+/// fixes) converges, but a non-converging oscillation (A→B→A→B, never two
+/// identical in a row) still terminates instead of churning unbounded.
+const REPAIR_HARD_CAP: u32 = 12;
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct RepairState {
+    /// Consecutive count of the SAME failure signature for this stage (the
+    /// "stuck on one issue" counter). A NEW distinct signature resets it to
+    /// 1 — that means the previous issue was fixed and a different one
+    /// surfaced, i.e. real forward progress, NOT a wasted attempt.
     #[serde(default)]
     stage1: u32,
     #[serde(default)]
     stage2: u32,
+    /// Last failure signature per stage — the progress detector.
+    #[serde(default)]
+    sig1: Option<String>,
+    #[serde(default)]
+    sig2: Option<String>,
+    /// Total attempts per stage — the `REPAIR_HARD_CAP` backstop.
+    #[serde(default)]
+    total1: u32,
+    #[serde(default)]
+    total2: u32,
     /// Set when a stage escalates: the player must choose alternative-vs-
     /// delete. While Some, the `assembled` tools refuse — a structural pause.
     #[serde(default)]
     awaiting: Option<String>,
+}
+
+/// Stable fingerprint of a failure's ESSENCE: the same root cause yields the
+/// same string; a genuinely different problem yields a different one. Lower-
+/// cased, digits/path-separators blanked (attempt-specific noise: ports,
+/// line numbers, temp paths), whitespace-collapsed, bounded. Drives the
+/// progress detector — a CHANGED signature means the prior issue was fixed.
+fn repair_signature(core: &str) -> String {
+    let cleaned: String = core
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_digit() || c == '/' || c == '\\' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(220)
+        .collect()
 }
 
 fn repair_state_path(id: &str) -> std::path::PathBuf {
@@ -3179,24 +3415,49 @@ fn save_repair_state(id: &str, st: &RepairState) {
 fn reset_repair_state(id: &str) {
     let _ = std::fs::remove_file(repair_state_path(id));
 }
-fn bump_stage(id: &str, stage: u8) -> u32 {
-    let mut st = load_repair_state(id);
-    let n = if stage == 1 {
-        st.stage1 += 1;
-        st.stage1
+/// Record an attempt for `stage` with failure signature `sig`. Returns
+/// (consecutive-same-signature count, total attempts). A NEW signature =
+/// forward progress: the same-count resets to 1 (only `total` keeps climbing,
+/// as the non-convergence backstop) — so "a different error every boot" never
+/// burns the stuck budget; only the SAME error recurring does.
+/// Pure transition (returns the new `(same_count, total)`): same signature →
+/// same-count increments (stuck); a different signature → same-count resets
+/// to 1 (the prior issue was fixed = progress); total always increments.
+fn next_repair_counts(
+    prev_cnt: u32,
+    prev_total: u32,
+    prev_sig: Option<&str>,
+    sig: &str,
+) -> (u32, u32) {
+    let cnt = if prev_sig == Some(sig) {
+        prev_cnt + 1
     } else {
-        st.stage2 += 1;
-        st.stage2
+        1
     };
-    save_repair_state(id, &st);
-    n
+    (cnt, prev_total + 1)
 }
-/// Stage 1 passed — clear ITS counter so a later Stage-1 regression (after a
+fn bump_stage(id: &str, stage: u8, sig: &str) -> (u32, u32) {
+    let mut st = load_repair_state(id);
+    let (cnt, last, tot) = if stage == 1 {
+        (&mut st.stage1, &mut st.sig1, &mut st.total1)
+    } else {
+        (&mut st.stage2, &mut st.sig2, &mut st.total2)
+    };
+    let (nc, nt) = next_repair_counts(*cnt, *tot, last.as_deref(), sig);
+    *cnt = nc;
+    *tot = nt;
+    *last = Some(sig.to_string());
+    save_repair_state(id, &st);
+    (nc, nt)
+}
+/// Stage 1 passed — clear ITS campaign so a later Stage-1 regression (after a
 /// Stage-2 repair churned the pack) starts fresh, not pre-escalated.
 fn reset_stage1(id: &str) {
     let mut st = load_repair_state(id);
-    if st.stage1 != 0 {
+    if st.stage1 != 0 || st.sig1.is_some() || st.total1 != 0 {
         st.stage1 = 0;
+        st.sig1 = None;
+        st.total1 = 0;
         save_repair_state(id, &st);
     }
 }
@@ -3240,19 +3501,304 @@ fn spawn_launch_chip_forward(
 /// Turn a real boot log into a curator-actionable diagnosis: the crash
 /// analyst if a key is set, else the raw log tail with an explicit
 /// "read this, do NOT speculate" instruction. Never a contentless message.
-async fn analyze_or_log(log: &str, mods: &[String], fallback: &str) -> String {
+fn substr_between<'a>(s: &'a str, a: &str, b: &str) -> Option<&'a str> {
+    let i = s.find(a)? + a.len();
+    let j = s[i..].find(b)? + i;
+    Some(&s[i..j])
+}
+
+/// Deterministic crash-chain grounding. The LLM analyst repeatedly speculates
+/// a superficial, MOVING culprit (an odd version string, a guessed mod-vs-mod
+/// conflict) while the log's own `Caused by:` chain already names the real
+/// cause. When the crash is the recognizable "mod X's entrypoint threw
+/// because a class is missing" shape, extract X + the missing class + the
+/// library that provides it, and instruct an ADD — never a removal of X or
+/// unrelated mods. Returns `None` for shapes we cannot ground (genuine
+/// runtime/mixin failures) → those still fall through to the LLM analyst.
+///
+/// The class-scan reuses fix-3's benign-probe guard: Fabric logs MANY
+/// harmless `[..WARN]: Error loading class: X (ClassNotFoundException: X)` /
+/// `@Mixin target` probes; only an actually-thrown `Caused by:` /
+/// `Exception in thread` / bare `java.lang.*` line is a real missing class.
+fn diagnose_crash_chain(log: &str, inst: Option<&Instance>) -> Option<String> {
+    let culprit = log.lines().find_map(|l| {
+        if l.contains("Could not execute entrypoint") {
+            substr_between(l, "provided by '", "'")
+        } else {
+            None
+        }
+    })?;
+    let missing = log.lines().find_map(|l| {
+        if l.contains("WARN")
+            || l.contains("Error loading class:")
+            || l.contains("@Mixin target")
+        {
+            return None; // benign optional-compat probe, not a real miss
+        }
+        let t = l.trim_start();
+        let real = t.starts_with("Caused by:")
+            || t.starts_with("Exception in thread")
+            || t.starts_with("java.lang.NoClassDefFoundError")
+            || t.starts_with("java.lang.ClassNotFoundException");
+        if !real {
+            return None;
+        }
+        for tag in ["NoClassDefFoundError: ", "ClassNotFoundException: "] {
+            if let Some(i) = t.find(tag) {
+                let cls = t[i + tag.len()..]
+                    .split(|c: char| c.is_whitespace() || c == ')')
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !cls.is_empty() {
+                    return Some(cls.replace('/', "."));
+                }
+            }
+        }
+        None
+    })?;
+    // Fix 4 — deterministic class -> mod attribution against the INSTALLED
+    // jars. If the missing class's package is owned by a mod that is present
+    // (but at an incompatible version — the class moved/renamed), name THAT
+    // mod and recommend a repin, not a removal of unrelated mods. Only reached
+    // when we have instance context (the LLM-free, jar-grounded path).
+    if let Some(inst) = inst {
+        if let Some(owner) = crate::registry::attribute_class_to_mod(
+            inst,
+            &instance_dir(&inst.id),
+            &missing,
+        ) {
+            if owner.mod_id != culprit {
+                return Some(format!(
+                    "GROUNDED DIAGNOSIS (crash `Caused by:` chain + \
+                     installed-jar scan, NOT a guess): mod '{culprit}' failed \
+                     at its entrypoint needing class '{missing}', which belongs \
+                     to '{owner}'. '{owner}' IS installed but at an \
+                     incompatible version (the class moved/renamed between \
+                     versions). FIX: repin '{owner}' (or '{culprit}') with \
+                     edit_pack so their versions match, then re-verify. Do NOT \
+                     remove '{culprit}' or any unrelated mod — this is a \
+                     version skew between two installed mods.",
+                    owner = owner.mod_id,
+                ));
+            }
+        }
+    }
+    // (package-prefix, human name, Some(modrinth slug) | None = not on Modrinth)
+    const KNOWN: &[(&str, &str, Option<&str>)] = &[
+        (
+            "io.github.fabricators_of_create.porting_lib",
+            "Porting Lib",
+            Some("porting-lib"),
+        ),
+        (
+            "com.teamresourceful.resourcefulconfig",
+            "Resourceful Config",
+            Some("resourceful-config"),
+        ),
+        (
+            "fr.catcore.server.translations",
+            "Server Translations API",
+            None, // GitHub/CurseForge only — unsatisfiable on Modrinth
+        ),
+    ];
+    let hit = KNOWN.iter().find(|(pfx, _, _)| missing.starts_with(pfx));
+    Some(match hit {
+        Some((_, name, Some(slug))) => format!(
+            "GROUNDED DIAGNOSIS (from the crash `Caused by:` chain, NOT a \
+             guess): mod '{culprit}' failed at its entrypoint because \
+             {name} is MISSING (NoClassDefFoundError {missing}). '{culprit}' \
+             hard-needs {name} but declares it in no manifest. FIX: ADD \
+             {name} (Modrinth slug '{slug}') with edit_pack, then re-verify. \
+             Do NOT remove '{culprit}' or any other mod — the missing \
+             library is the cause; earlier removals were unrelated collateral."
+        ),
+        Some((_, name, None)) => format!(
+            "GROUNDED DIAGNOSIS (from the crash `Caused by:` chain): mod \
+             '{culprit}' hard-requires {name} (missing class {missing}), \
+             which is NOT on Modrinth for this MC/loader. Under Anvil's \
+             Modrinth-only sourcing this is UNSATISFIABLE — the only real \
+             options are removing '{culprit}' (and what depends on it) or \
+             swapping it for a Modrinth alternative. Do NOT churn unrelated \
+             mods; tell the player this is a hard sourcing limit."
+        ),
+        None => format!(
+            "GROUNDED DIAGNOSIS (from the crash `Caused by:` chain): mod \
+             '{culprit}' failed at its entrypoint with NoClassDefFoundError \
+             {missing}. The fix is to ADD the library that provides class \
+             '{missing}' (search Modrinth for it), NOT to remove '{culprit}' \
+             or other mods. Do not speculate about unrelated culprits."
+        ),
+    })
+}
+
+/// A single benign optional-integration probe line Fabric emits constantly
+/// (`Error loading class: …` / `@Mixin target … was not found`). These name
+/// other mods (immediatelyfast, iris, jei, frex) but are NOT crashes — they are
+/// what the analyst kept mis-attributing the culprit to. Never a real signal.
+fn is_benign_probe(l: &str) -> bool {
+    l.contains("Error loading class:") || l.contains("@Mixin target")
+}
+
+/// A genuinely fatal exception line (the thrown cause), excluding benign probes.
+fn is_fatal_exception_line(l: &str) -> bool {
+    if is_benign_probe(l) || l.contains("/WARN]") {
+        return false;
+    }
+    let t = l.trim_start();
+    t.starts_with("Caused by:")
+        || t.starts_with("Exception in thread")
+        || t.starts_with("java.lang.NoClassDefFoundError")
+        || t.starts_with("java.lang.ClassNotFoundException")
+        || (t.starts_with("java.lang.") && t.contains("Exception"))
+        || t.contains("InvalidInjectionException")
+        || t.contains("MixinApplyError")
+        || t.contains("MixinTransformerError")
+        || t.contains("KotlinReflectionInternalError")
+}
+
+/// True iff the log contains ANY real crash signature. When this is false there
+/// is nothing to diagnose — the LLM must NOT be asked to pick a culprit (Fix 2).
+fn has_crash_signature(log: &str) -> bool {
+    log.lines().any(|l| {
+        l.contains("Could not execute entrypoint")
+            || l.contains("---- Minecraft Crash Report ----")
+            || l.contains("Incompatible mods found")
+            || (l.contains("requires") && l.contains("which is missing"))
+            || is_fatal_exception_line(l)
+    })
+}
+
+/// Drop benign optional-integration probe lines so they can never bait the LLM
+/// analyst (Fix 3). Real ERROR/`Caused by:` lines are untouched.
+fn strip_benign(log: &str) -> String {
+    log.lines()
+        .filter(|l| !is_benign_probe(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// First application (mod) class on the failing stack — skips vanilla, the
+/// loader, the JDK, and the mixin/ASM frameworks. Used to attribute a
+/// runtime/mixin crash that names no entrypoint mod.
+fn top_frame_class(log: &str) -> Option<String> {
+    const SKIP: &[&str] = &[
+        "net.minecraft.",
+        "net.fabricmc.",
+        "java.",
+        "javax.",
+        "jdk.",
+        "sun.",
+        "org.spongepowered.",
+        "com.llamalad7.mixinextras.",
+        "org.objectweb.asm.",
+        "io.netty.",
+    ];
+    for l in log.lines() {
+        let t = l.trim_start();
+        let Some(rest) = t.strip_prefix("at ") else {
+            continue;
+        };
+        let rest = rest.strip_prefix("knot//").unwrap_or(rest);
+        let sig = rest.split('(').next().unwrap_or(rest); // pkg.Class.method
+        let Some(i) = sig.rfind('.') else {
+            continue;
+        };
+        let class = &sig[..i]; // drop the trailing method segment
+        if !class.contains('.') || SKIP.iter().any(|p| class.starts_with(p)) {
+            continue;
+        }
+        return Some(class.to_string());
+    }
+    None
+}
+
+/// Deterministic culprit for a crash with NO entrypoint `provided by` line — a
+/// mixin-apply failure or a deeper runtime exception. The mod is named either
+/// by the loader (`Mixin apply for mod X failed` / `from mod X`) or by
+/// attributing the top application stack frame's class to its owning jar. Only
+/// fires on a real fatal exception; ambiguous crashes return `None` (the caller
+/// then surfaces the raw evidence — never a guess).
+fn diagnose_runtime_chain(log: &str, inst: &Instance) -> Option<String> {
+    if log.lines().any(|l| l.contains("Could not execute entrypoint")) {
+        return None; // entrypoint crashes are diagnose_crash_chain's job
+    }
+    if !log.lines().any(is_fatal_exception_line) {
+        return None;
+    }
+    let mixin_mod = log.lines().find_map(|l| {
+        substr_between(l, "Mixin apply for mod ", " failed")
+            .or_else(|| {
+                if l.contains("ixin") {
+                    substr_between(l, "from mod ", " ")
+                } else {
+                    None
+                }
+            })
+            .map(str::to_string)
+    });
+    let culprit = mixin_mod.or_else(|| {
+        top_frame_class(log)
+            .and_then(|cls| {
+                crate::registry::attribute_class_to_mod(
+                    inst,
+                    &instance_dir(&inst.id),
+                    &cls,
+                )
+            })
+            .map(|o| o.mod_id)
+    })?;
+    Some(format!(
+        "GROUNDED DIAGNOSIS (runtime/mixin crash + installed-jar scan, NOT a \
+         guess): the crash originates in '{culprit}' — its class is on the \
+         failing stack / it owns the failing mixin, not at any entrypoint. \
+         FIX: repin '{culprit}' to a compatible version with edit_pack, or if \
+         it integrates with another mod repin that mod to match; remove only \
+         as a last resort. Re-verify. Do NOT churn unrelated mods.",
+    ))
+}
+
+/// Turn a crash log into a curator-facing diagnosis. Order: (1) jar-grounded
+/// entrypoint missing-class attribution, (2) jar-grounded runtime/mixin
+/// attribution, (3) Fix 2 — if there is NO crash signature at all, refuse to
+/// guess, and (4) only a REAL-but-unpinnable crash reaches the LLM analyst,
+/// fed a benign-probe-stripped tail so it can explain (never invent) a culprit.
+async fn analyze_or_log(log: &str, inst: &Instance, fallback: &str) -> String {
+    if let Some(grounded) = diagnose_crash_chain(log, Some(inst)) {
+        return format!("{fallback}\n{grounded}");
+    }
+    if let Some(grounded) = diagnose_runtime_chain(log, inst) {
+        return format!("{fallback}\n{grounded}");
+    }
+    if !has_crash_signature(log) {
+        // Fix 2: no entrypoint line, no fatal exception, no resolution reject —
+        // the boot was killed before the stack flushed, or ended cleanly. There
+        // is no culprit to name; NEVER let the LLM pick one from noise.
+        return format!(
+            "{fallback}\nNo crash signature was captured in this log (the boot \
+             likely exited before the crash flushed, or ended without a \
+             classified error). Do NOT name, remove, or repin a mod from \
+             guesswork — re-run verify_pack to capture a full crash, or tell \
+             the player to launch once themselves. The cause is not in this log."
+        );
+    }
+    // A real crash exists but no mod could be pinned deterministically. Let the
+    // LLM EXPLAIN it, fed a probe-stripped tail; the prompt forbids inventing a
+    // culprit (Fix 2/3 belt-and-suspenders).
+    let clean = strip_benign(log);
+    let mods: Vec<String> = inst.mods.iter().map(|m| m.name.clone()).collect();
     match crate::settings::anthropic_key() {
-        Some(k) => analyze_crash(&k, log, mods).await.unwrap_or_else(|e| {
+        Some(k) => analyze_crash(&k, &clean, &mods).await.unwrap_or_else(|e| {
             format!(
                 "{fallback}\nRead the actual log below and fix the specific \
                  error — do NOT speculate:\n{}\n(analysis unavailable: {e})",
-                tail_chars(log, 5000)
+                tail_chars(&clean, 5000)
             )
         }),
         None => format!(
             "{fallback}\nRead the actual log below and fix the specific \
              error it shows — do NOT speculate about likely culprits:\n{}",
-            tail_chars(log, 6000)
+            tail_chars(&clean, 6000)
         ),
     }
 }
@@ -3266,20 +3812,26 @@ async fn analyze_or_log(log: &str, mods: &[String], fallback: &str) -> String {
 /// runtime/mixin/entrypoint failure (no parseable remediation) falls through
 /// to the LLM analyst.
 async fn stage1_core(
-    id: &str,
+    inst: &Instance,
     reason: &str,
     mod_name: Option<&str>,
-    mods: &[String],
 ) -> String {
     let head = format!(
         "Client smoke failed: {}{reason}",
         mod_name.map(|m| format!("[{m}] ")).unwrap_or_default()
     );
-    let Some(l) = std::fs::read_to_string(
-        instance_dir(id).join("logs").join("latest.log"),
-    )
-    .ok()
-    .filter(|s| s.trim().len() > 40) else {
+    // Prefer the COMPLETE captured boot log (Fix 1 tees full stdout there,
+    // including the whole crash echo) over `latest.log`, which a kill-on-crash
+    // can truncate before the stack flushes.
+    let Some(l) = newest_boot_log(&inst.id)
+        .or_else(|| {
+            std::fs::read_to_string(
+                instance_dir(&inst.id).join("logs").join("latest.log"),
+            )
+            .ok()
+        })
+        .filter(|s| s.trim().len() > 40)
+    else {
         return head;
     };
     // Mirror Stage 2: deterministic parser on the resolution-reject class.
@@ -3288,7 +3840,26 @@ async fn stage1_core(
             return rem.summary;
         }
     }
-    analyze_or_log(&l, mods, &head).await
+    analyze_or_log(&l, inst, &head).await
+}
+
+/// Newest captured per-boot verify log (`<instance>/.verify-logs/boot-*.log`),
+/// the complete stdout tee written by `smoke_test` (Fix 1 + audit). `None` when
+/// none has been written yet.
+fn newest_boot_log(instance_id: &str) -> Option<String> {
+    let dir = instance_dir(instance_id).join(".verify-logs");
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+    for e in std::fs::read_dir(&dir).ok()?.flatten() {
+        let p = e.path();
+        if p.extension().is_some_and(|x| x == "log") {
+            if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                if newest.as_ref().map(|(t, _)| m > *t).unwrap_or(true) {
+                    newest = Some((m, p));
+                }
+            }
+        }
+    }
+    std::fs::read_to_string(newest?.1).ok()
 }
 
 /// Map a failed stage to a verdict. Under budget → Blocked + repair contract
@@ -3302,15 +3873,29 @@ fn stage_verdict(
     core: String,
     culprit: Option<&str>,
 ) -> GateVerdict {
-    let n = bump_stage(id, stage);
+    let sig = repair_signature(&core);
+    let (same, total) = bump_stage(id, stage, &sig);
     let who = culprit
         .map(|c| format!("'{c}'"))
         .unwrap_or_else(|| "the offending mod".to_string());
-    if n >= STAGE_BUDGET {
+    let stuck = same >= STAGE_BUDGET; // identical failure recurred → not progressing
+    let exhausted = total >= REPAIR_HARD_CAP; // not converging overall
+    if stuck || exhausted {
+        let why = if stuck {
+            format!(
+                "the SAME failure has recurred {same}× despite repair — \
+                 stuck on this specific issue (not the moving-culprit case)"
+            )
+        } else {
+            format!(
+                "{total} repair attempts without converging — the failure \
+                 keeps changing, so this pack is likely unsatisfiable as-is"
+            )
+        };
         let msg = format!(
-            "{stage_label} STILL fails after {n} autonomous repair attempts. \
-             Stop auto-repairing and DECIDE WITH THE PLAYER — present exactly \
-             these two options and ask which they want, do NOT pick:\n\
+            "{stage_label}: {why}. Stop auto-repairing and DECIDE WITH THE \
+             PLAYER — present exactly these two options and ask which they \
+             want, do NOT pick:\n\
              \x20 (A) swap {who} for an alternative (use search_mods to find \
              a fitting replacement, then edit_pack add+remove)\n\
              \x20 (B) remove {who}\n\
@@ -3320,14 +3905,17 @@ fn stage_verdict(
         GateVerdict::Escalate(msg)
     } else {
         GateVerdict::Blocked(format!(
-            "{stage_label} failed (attempt {n}/{STAGE_BUDGET}). Repair \
-             autonomously and re-verify.\n\n{core}{}",
+            "{stage_label} failed (attempt {total}; this specific issue \
+             {same}/{STAGE_BUDGET}). A DIFFERENT error than last time means \
+             the previous fix worked — that is progress, keep repairing and \
+             re-verifying (you are NOT close to the budget unless the SAME \
+             error keeps recurring).\n\n{core}{}",
             repair_contract(id)
         ))
     }
 }
 
-/// Outcome of the authoritative pre-quest world-gen gate.
+/// Outcome of the authoritative pre-quest verify gate.
 pub(crate) enum GateVerdict {
     /// The pack booted a server that generated a world cleanly AND the real
     /// runtime registry is reconciled into the cache. Safe to design quests.
@@ -3345,7 +3933,7 @@ pub(crate) enum GateVerdict {
     Escalate(String),
 }
 
-/// Authoritative world-gen gate, shared by `verify_pack` and the pre-quest
+/// Authoritative verify gate, shared by `verify_pack` and the pre-quest
 /// transition. The headless dedicated-server `/dump registry` boot only
 /// prints its ready line AFTER it has generated and ticked the spawn region,
 /// so it exercises WORLD CREATION (the class `smoke_test`'s title-screen
@@ -3353,11 +3941,16 @@ pub(crate) enum GateVerdict {
 /// registry. Idempotent: a `DumpReconciled` cache for the CURRENT pins is the
 /// fast path (the detached background pass usually already did this), so
 /// calling it at the top of every `generate_quests` batch is cheap.
-pub(crate) async fn world_gen_gate(
+pub(crate) async fn verify_gate(
     inst: &Instance,
     mr: &Modrinth,
     tx: &UnboundedSender<CuratorEvent>,
 ) -> GateVerdict {
+    // `mr` is intentionally unused while Stage 2 is disabled (it was the
+    // Modrinth client the dump helper resolved through). Keep the parameter
+    // so the signature is stable for callers; delete this line when
+    // re-enabling Stage 2 below.
+    let _ = mr;
     // Fast path: already booted+reconciled for these exact pins.
     let cache = instance_dir(&inst.id).join("anvil-registry.json");
     let key = crate::registry::mod_set_key(inst);
@@ -3378,9 +3971,6 @@ pub(crate) async fn world_gen_gate(
             }
         }
     }
-
-    let mods: Vec<String> =
-        inst.mods.iter().map(|m| m.name.clone()).collect();
 
     // ---- Stage 1: client smoke (real client, pre-window, NO window) ------
     // Catches resolution + mod-init incompatibilities INCLUDING client-only
@@ -3418,118 +4008,137 @@ pub(crate) async fn world_gen_gate(
     };
     tool_chip(tx, "verify_pack", "stage 1: client smoke (~1 min, no window)");
     let ltx = spawn_launch_chip_forward(tx, "verify_pack");
+    // Snapshot crash reports BEFORE the boot. An onInitialize crash (e.g. an
+    // incompatible Create integration) dies during `class_310.<init>` and
+    // writes only to `crash-reports/*` — `smoke_test` sees stdout end with no
+    // classified line and returns Inconclusive. Without this, that crash was
+    // treated as a weak-positive PASS. Set-diff after the boot reveals it.
+    let crashes_before = crash_report_set(&inst.id);
+    // ---- Stage 2 DISABLED 2026-05-19 (see big block comment below) -------
+    // Stage 1 (client smoke) is the sole verify check while a host-side dyld
+    // crash on the headless-server LWJGL load is being investigated. On a
+    // clean Stage-1 smoke (or an inconclusive-no-crash) we go straight to
+    // `Verified` + Phase("progression"). The static jar scan remains the
+    // registry grounding (no DumpReconciled while Stage 2 is off).
     match crate::launch::smoke_test(inst, &acct, None, ltx).await {
         Ok(crate::launch::SmokeVerdict::Ok) => {
-            // Stage 1 passed — clear its counter so a later Stage-1
-            // regression starts fresh; fall through to Stage 2.
-            reset_stage1(&inst.id);
+            // NOTE: Stage 1b (world-join probe) is wired in `launch.rs` but
+            // NOT invoked here yet. `--quickPlaySingleplayer <name>` only
+            // JOINS an existing save — it does NOT create one — so the
+            // probe currently surfaces "Failed to Quick Play / Could not
+            // find world with the provided identifier" and times out
+            // without ever exercising `onJoinWorld` (where IPN-class
+            // crashes live). Re-wire this branch when one of these lands:
+            //   - a bundled minimal level.dat fixture extracted into
+            //     `<instance>/saves/anvil_world_probe/` pre-launch (no
+            //     extra deps; ~3 KB binary include_bytes! in launch.rs); OR
+            //   - a localhost-server-then-client-join approach reusing the
+            //     dedicated-server boot path (no save needed but pays a
+            //     second JVM); OR
+            //   - an NBT-writer dependency (e.g. `fastnbt`) that builds
+            //     level.dat at probe time.
+            // Until then, smoke_test Ok is the verify verdict.
+            reset_repair_state(&inst.id);
+            let _ = tx.send(CuratorEvent::Phase("progression".to_string()));
+            GateVerdict::Verified
         }
         Ok(crate::launch::SmokeVerdict::Failed { mod_name, reason }) => {
-            let core =
-                stage1_core(&inst.id, &reason, mod_name.as_deref(), &mods)
-                    .await;
-            return stage_verdict(
+            // Prefer a fresh crash report (entrypoint/onInitialize crashes
+            // land in `crash-reports/*`, not the truncated `logs/latest.log`).
+            let (culprit, core) =
+                match crash_report_since(&inst.id, &crashes_before) {
+                    Some(report) => stage1_from_crash(&report, inst).await,
+                    None => (
+                        mod_name.clone(),
+                        stage1_core(inst, &reason, mod_name.as_deref()).await,
+                    ),
+                };
+            stage_verdict(
                 &inst.id,
                 "Stage 1 (client smoke)",
                 1,
                 core,
-                mod_name.as_deref(),
-            );
+                culprit.as_deref(),
+            )
         }
         Ok(crate::launch::SmokeVerdict::Inconclusive { reason }) => {
-            // The smoke RAN to a non-crash timeout (weak-positive: it got
-            // far without crashing). Distinct from "could not run" — Stage 2
-            // still adds world-gen + registry-grounding value here.
-            let _ = tx.send(CuratorEvent::Text(format!(
-                "\n_(Client smoke inconclusive ({reason}) — running \
-                 world-gen verification.)_\n"
-            )));
-        }
-        Err(e) => {
-            // The client smoke could not run at all (JVM spawn, etc.) —
-            // same as the auth case: don't ghost-chase a server-only boot.
-            return GateVerdict::Unverified(format!(
-                "the client smoke could not run ({e:#}); re-verify — it is \
-                 required for a full check (a server-only boot misses \
-                 client-side crashes)"
-            ));
-        }
-    }
-
-    // ---- Stage 2: headless world-gen (dedicated server, NO window) -------
-    // wait_for_jvm = true: queue behind any other JVM rather than skipping
-    // the only world-creation verification.
-    tool_chip(
-        tx,
-        "verify_pack",
-        "stage 2: world creation (~1-2 min, no window)",
-    );
-    let ltx = spawn_launch_chip_forward(tx, "verify_pack");
-    match crate::launch::registry_dump_pass(inst, mr, true, ltx).await {
-        Ok(crate::launch::DumpOutcome::Dumped(dir)) => {
-            reconcile_dump_into_cache(inst, &inst.id, &dir);
-            reset_repair_state(&inst.id);
-            // assembled→progression edge (see fast-path note).
-            let _ = tx.send(CuratorEvent::Phase("progression".to_string()));
-            GateVerdict::Verified
-        }
-        Ok(crate::launch::DumpOutcome::Crashed { mod_name, reason }) => {
-            // Stage R (mod resolution): the deterministic Fabric-remediation
-            // parser already produced the root-cause repins — more reliable
-            // than an LLM read, use verbatim. Stage W (runtime/world-gen):
-            // analyze_crash on the real crash report.
-            let stage_r = reason.starts_with("Mod resolution failed")
-                || reason.starts_with("Pack failed mod resolution");
-            let core = if stage_r {
-                reason
-            } else {
-                let crash = newest_crash_report(&inst.id)
-                    .unwrap_or_else(|| reason.clone());
-                analyze_or_log(&crash, &mods, &reason).await
-            };
-            stage_verdict(
-                &inst.id,
-                "Stage 2 (world creation)",
-                2,
-                core,
-                mod_name.as_deref(),
-            )
-        }
-        Ok(crate::launch::DumpOutcome::Failed(why)) => {
-            // No classified crash (mod clash / mixin / embedded-dep the
-            // parser doesn't match): feed the REAL server log to the
-            // analyst — never a contentless "didn't complete" → speculation.
-            let evidence = std::fs::read_to_string(
-                instance_dir(&inst.id)
-                    .join(".anvil-dump")
-                    .join("logs")
-                    .join("latest.log"),
-            )
-            .ok()
-            .filter(|s| s.trim().len() > 40)
-            .or_else(|| newest_crash_report(&inst.id));
-            let core = match evidence {
-                Some(log) => analyze_or_log(&log, &mods, &why).await,
-                None => format!(
-                    "The boot did not complete: {why}. No boot log was \
-                     captured. This is NOT a confirmation the pack works."
-                ),
-            };
-            stage_verdict(
-                &inst.id,
-                "Stage 2 (world creation)",
-                2,
-                core,
-                None,
-            )
-        }
-        Ok(crate::launch::DumpOutcome::EnvUnavailable(why)) => {
-            GateVerdict::Unverified(why)
+            // A boot can crash in a mod's onInitialize (during
+            // `class_310.<init>`, right after "Setting user:") and write the
+            // crash to `crash-reports/*` while stdout ends with no classified
+            // line → smoke reports Inconclusive. Treating that as a pass
+            // shipped CRASHING packs (the another_furniture entrypoint
+            // NoClassDefFoundError). If THIS boot wrote a fresh crash report
+            // it FAILED — route it through the deterministic classifier; only
+            // a truly crash-free Inconclusive is the weak positive.
+            match crash_report_since(&inst.id, &crashes_before) {
+                Some(report) => {
+                    let (culprit, core) =
+                        stage1_from_crash(&report, inst).await;
+                    stage_verdict(
+                        &inst.id,
+                        "Stage 1 (client smoke)",
+                        1,
+                        core,
+                        culprit.as_deref(),
+                    )
+                }
+                None => {
+                    // Smoke ran the budget without a crash — weak positive.
+                    // With Stage 2 off there is no further check; accept it
+                    // and surface the caveat so the player launches once.
+                    let _ = tx.send(CuratorEvent::Text(format!(
+                        "\n_(Client smoke inconclusive ({reason}) — no crash \
+                         within the budget; proceeding to progression. Launch \
+                         yourself to confirm it plays.)_\n"
+                    )));
+                    reset_repair_state(&inst.id);
+                    let _ = tx
+                        .send(CuratorEvent::Phase("progression".to_string()));
+                    GateVerdict::Verified
+                }
+            }
         }
         Err(e) => GateVerdict::Unverified(format!(
-            "verification boot could not run: {e:#}"
+            "the client smoke could not run ({e:#}); re-verify"
         )),
     }
+
+    /* ---- Stage 2 disabled (kept verbatim for re-enable) ----------------
+     * Re-enable by deleting this block-comment delimiter and the matching
+     * close, deleting the `match … smoke_test` above's `Ok` and
+     * `Inconclusive` arms' `reset_repair_state + Phase("progression") +
+     * Verified` short-circuits (restore their fall-through `reset_stage1` /
+     * caveat-only behaviour), and also re-enabling
+     * `spawn_registry_dump_detached`'s body (the matching DISABLED note).
+     *
+     * tool_chip(tx, "verify_pack", "stage 2: world creation (~1-2 min, no window)");
+     * let ltx2 = spawn_launch_chip_forward(tx, "verify_pack");
+     * match crate::launch::registry_dump_pass(inst, mr, true, ltx2).await {
+     *     Ok(DumpOutcome::Dumped(dir)) => {
+     *         reconcile_dump_into_cache(inst, &inst.id, &dir);
+     *         reset_repair_state(&inst.id);
+     *         tx.send(CuratorEvent::Phase("progression".to_string()));
+     *         GateVerdict::Verified
+     *     }
+     *     Ok(DumpOutcome::Crashed { mod_name, reason }) => {
+     *         let stage_r = reason.starts_with("Mod resolution failed")
+     *             || reason.starts_with("Pack failed mod resolution");
+     *         let core = if stage_r { reason }
+     *             else { analyze_or_log(&newest_crash_report(&inst.id)
+     *                 .unwrap_or_else(|| reason.clone()), &mods, &reason).await };
+     *         stage_verdict(&inst.id, "Stage 2 (world creation)", 2, core,
+     *             mod_name.as_deref())
+     *     }
+     *     Ok(DumpOutcome::Failed(why)) => {
+     *         // fix-4: real-crash-signal → analyst+stage_verdict, else Unverified.
+     *         // (full body in git history at this file + commit ddcdde2's children)
+     *         …
+     *     }
+     *     Ok(DumpOutcome::EnvUnavailable(why)) => GateVerdict::Unverified(why),
+     *     Err(e) => GateVerdict::Unverified(format!(
+     *         "verification boot could not run: {e:#}")),
+     * }
+     */
 }
 
 async fn tool_assemble_pack(
@@ -3870,7 +4479,7 @@ async fn tool_seed_from_pack(
 /// `run_turn` round loop (bounded by MAX_TOOL_ROUNDS) IS the repair loop, so
 /// a failed proposal returns structured `{kind,where,why,hint}` issues rather
 /// than erroring. A single authored set per pack (REPLACES on re-call).
-async fn tool_generate_origins(
+async fn tool_generate_origins_raw_apoli(
     mr: &Modrinth,
     thread_id: Option<&str>,
     input: &Value,
@@ -3883,44 +4492,45 @@ async fn tool_generate_origins(
         .ok_or_else(|| anyhow!("missing required object field 'origins'"))?;
 
     let _ = tx.send(CuratorEvent::Phase("progression".to_string()));
-    tool_chip(tx, "generate_origins", "validating");
+    tool_chip(tx, "generate_origins_raw_apoli", "validating");
 
     let set: crate::origins::OriginsSet = match serde_json::from_value(origins_val) {
         Ok(s) => s,
         Err(e) => {
             return Ok(format!(
-                "generate_origins: the `origins` JSON did not match the expected shape: {e}. \
+                "generate_origins_raw_apoli: the `origins` JSON did not match the expected shape: {e}. \
                  Each origin needs id/name/description/powers/icon/impact(int 0-3)/order; \
-                 each power needs id/name/description/type(+optional body). Fix and call again."
+                 each power needs id/name/description/type(+optional body). Fix and call again — \
+                 or better, switch to generate_origin_intents which validates against the typed PerkIntent enum."
             ));
         }
     };
 
     let Some(inst) = load_instances().into_iter().find(|i| i.id == instance_id) else {
         return Ok(format!(
-            "generate_origins: no instance found with id {instance_id}. Assemble the pack first."
+            "generate_origins_raw_apoli: no instance found with id {instance_id}. Assemble the pack first."
         ));
     };
 
-    // Same authoritative world-gen gate as generate_quests (idempotent —
+    // Same authoritative verify gate as generate_quests (idempotent —
     // normally the DumpReconciled fast-path since quests ran first).
-    let gate_caveat = match world_gen_gate(&inst, mr, tx).await {
+    let gate_caveat = match verify_gate(&inst, mr, tx).await {
         GateVerdict::Verified => String::new(),
         GateVerdict::Unverified(why) => format!(
             "NOTE: pack UNVERIFIED ({why}) — origin ids grounded on the \
              static scan; tell the player. "
         ),
         GateVerdict::Blocked(detail) => {
-            tool_chip(tx, "generate_origins", "blocked: pack fails to boot");
+            tool_chip(tx, "generate_origins_raw_apoli", "blocked: pack fails to boot");
             return Ok(format!(
                 "BLOCKED: cannot author origins for a pack that does not \
                  create a world. Nothing written.\n{detail}\nRelay to the \
                  player and ASK; if approved, edit_pack out the culprit then \
-                 call generate_origins again."
+                 call generate_origins_raw_apoli again."
             ));
         }
         GateVerdict::Escalate(msg) => {
-            tool_chip(tx, "generate_origins", "blocked: needs player decision");
+            tool_chip(tx, "generate_origins_raw_apoli", "blocked: needs player decision");
             return Ok(format!(
                 "BLOCKED: the pack does not boot and autonomous repair is \
                  exhausted. Nothing written. Relay this to the player and \
@@ -3944,16 +4554,16 @@ async fn tool_generate_origins(
     });
     if !has_core {
         return Ok(format!(
-            "generate_origins: instance {instance_id} does not pin Origins core, so a custom \
-             origins datapack would do nothing. Do not call generate_origins for this pack."
+            "generate_origins_raw_apoli: instance {instance_id} does not pin Origins core, so a custom \
+             origins datapack would do nothing. Do not call generate_origins_raw_apoli for this pack."
         ));
     }
     if !has_open_loader {
         return Ok(format!(
-            "generate_origins: instance {instance_id} has Origins but not Open Loader, so the \
+            "generate_origins_raw_apoli: instance {instance_id} has Origins but not Open Loader, so the \
              origins datapack (config/openloader/data/...) would never load. Recover: add it in \
              place with edit_pack (project \"open-loader\", 1.20.1 fabric), re-verify, then call \
-             generate_origins again."
+             generate_origins_raw_apoli again."
         ));
     }
 
@@ -3962,10 +4572,10 @@ async fn tool_generate_origins(
     let validated = match crate::origins::validate(set) {
         Ok(v) => v,
         Err(errs) => {
-            tool_chip(tx, "generate_origins", "blocked: invalid");
+            tool_chip(tx, "generate_origins_raw_apoli", "blocked: invalid");
             return Ok(format!(
-                "generate_origins refused to write: {} issue(s). Fix EXACTLY these and call \
-                 generate_origins again with the corrected full set:\n{}",
+                "generate_origins_raw_apoli refused to write: {} issue(s). Fix EXACTLY these and call \
+                 generate_origins_raw_apoli again with the corrected full set:\n{}",
                 errs.len(),
                 serde_json::to_string(&crate::origins::errors_to_json(&errs))?
             ));
@@ -3983,14 +4593,346 @@ async fn tool_generate_origins(
     }
 
     let s = validated.get();
-    tool_chip(tx, "generate_origins", "done");
+    tool_chip(tx, "generate_origins_raw_apoli", "done");
+    // Advance to ITERATING only if quests already exist (see origin_intents).
+    if quests_authored(&instance_id) {
+        let _ = tx.send(CuratorEvent::Phase("iterating".to_string()));
+    }
     Ok(format!(
-        "{gate_caveat}generate_origins: wrote {} custom origin(s) and {} power file(s) to instance \
+        "{gate_caveat}generate_origins_raw_apoli: wrote {} custom origin(s) and {} power file(s) to instance \
          {instance_id}. The Origins datapack is valid and fully replaces any prior set. \
-         Do not call generate_origins again unless revising the whole set.",
+         Do not call generate_origins_raw_apoli again unless revising the whole set.",
         s.origins.len(),
         s.powers.len()
     ))
+}
+
+/// `generate_origin_intents` — the typed-intent authoring path.
+///
+/// Input shape: `{ instance_id, density: "light"|"standard"|"rich",
+///                 origins: [OriginIntent, ...] }`
+/// where OriginIntent uses the closed `PerkIntent` enum (`intent: "..."`
+/// tagged) — the LLM authors gameplay-driver mechanics like ComboChain,
+/// Siphon, BlockInRadius proximity gating, BiomeTag conditions, vampire
+/// daylight burns (DotWhen + And[Daytime, ExposedToSky]), TallyMilestone
+/// scoreboard-gated unlocks, etc. These are invisible to the legacy
+/// generate_origins tool which only authors raw Apoli powers.
+///
+/// Pipeline: for each OriginIntent, run `check_origin_intent` (density-
+/// budget + capabilities + grounding) → if clean, `emit_perk` each perk →
+/// aggregate local powers + companion mcfunctions → `validate(OriginsSet)`
+/// → `write_validated_origins_with_companion` to land powers + mcfunctions
+/// + tick.json/load.json tags. On any issue NOTHING is written; the
+/// structured issue payload is returned for the next round to fix.
+async fn tool_generate_origin_intents(
+    mr: &Modrinth,
+    thread_id: Option<&str>,
+    input: &Value,
+    tx: &UnboundedSender<CuratorEvent>,
+) -> anyhow::Result<String> {
+    use crate::origins::{
+        check_origin_intent, emit_perk, validate, write_validated_origins_with_companion,
+        CompanionMcFunctions, Density, EmitContext, Origin, OriginIntent, OriginsSet,
+    };
+
+    let instance_id = str_field(input, "instance_id")?.to_string();
+    let density_str = input.get("density").and_then(|v| v.as_str()).unwrap_or("standard");
+    let density = match density_str {
+        "light"    => Density::Light,
+        "standard" => Density::Standard,
+        "rich"     => Density::Rich,
+        other => return Ok(format!(
+            "generate_origin_intents: unknown density `{other}`. Pick one of: light, standard, rich."
+        )),
+    };
+    let origins_val = input.get("origins").cloned()
+        .ok_or_else(|| anyhow!("missing required array field 'origins'"))?;
+
+    let _ = tx.send(CuratorEvent::Phase("progression".to_string()));
+    tool_chip(tx, "generate_origin_intents", "validating");
+
+    // Deserialise the array of OriginIntent.
+    let intents: Vec<OriginIntent> = match serde_json::from_value(origins_val) {
+        Ok(v) => v,
+        Err(e) => return Ok(format!(
+            "generate_origin_intents: the `origins` JSON did not match the OriginIntent shape: {e}. \
+             Each origin needs theme/name/description/icon/perks(array of PerkIntent with `intent` tag). \
+             See the CUSTOM ORIGINS INTENTS block in the system prompt for examples."
+        )),
+    };
+    if intents.is_empty() {
+        return Ok("generate_origin_intents: empty origins array — author 2-5 intents and call again.".into());
+    }
+
+    let Some(inst) = load_instances().into_iter().find(|i| i.id == instance_id) else {
+        return Ok(format!(
+            "generate_origin_intents: no instance found with id {instance_id}. Assemble the pack first."
+        ));
+    };
+
+    // Same verify-gate as legacy generate_origins.
+    let gate_caveat = match verify_gate(&inst, mr, tx).await {
+        GateVerdict::Verified => String::new(),
+        GateVerdict::Unverified(why) => format!(
+            "NOTE: pack UNVERIFIED ({why}) — origin ids grounded on the static scan; tell the player. "
+        ),
+        GateVerdict::Blocked(detail) => {
+            tool_chip(tx, "generate_origin_intents", "blocked: pack fails to boot");
+            return Ok(format!(
+                "BLOCKED: cannot author origins for a pack that does not create a world. \
+                 Nothing written.\n{detail}\nRelay to the player and ASK; if approved, \
+                 edit_pack out the culprit then call generate_origin_intents again."
+            ));
+        }
+        GateVerdict::Escalate(msg) => {
+            tool_chip(tx, "generate_origin_intents", "blocked: needs player decision");
+            return Ok(format!(
+                "BLOCKED: the pack does not boot and autonomous repair is exhausted. \
+                 Nothing written. Relay this to the player and STOP — wait for their A/B choice:\n{msg}"
+            ));
+        }
+    };
+
+    // Origins core + Open Loader gate (same as legacy).
+    let has_core = inst.mods.iter()
+        .any(|m| crate::origins::is_origins_core(&m.project_id, &m.name));
+    let has_open_loader = inst.mods.iter().any(|m| {
+        let needle = |s: &str| {
+            let s = s.to_lowercase();
+            s.contains("open-loader") || s.contains("openloader")
+        };
+        needle(&m.project_id) || needle(&m.name) || needle(&m.path)
+    });
+    if !has_core {
+        return Ok(format!(
+            "generate_origin_intents: instance {instance_id} does not pin Origins core. \
+             Add it via edit_pack and call again."
+        ));
+    }
+    if !has_open_loader {
+        return Ok(format!(
+            "generate_origin_intents: instance {instance_id} needs open-loader for the \
+             companion datapack channel. Add it via edit_pack and call again."
+        ));
+    }
+
+    // The pack's mod-id list (for capability checks). Modrinth's `project_id`
+    // is an opaque hash (`AjW5DBn7`), not a slug, so a project_id-only lookup
+    // would miss every entry in the capabilities() map. Pass BOTH project_id
+    // AND display name per mod — name normalises cleanly ("Open Loader" →
+    // "openloader") and matches the map key. capabilities() takes the union,
+    // so duplicates are harmless.
+    let mod_ids: Vec<&str> = inst.mods.iter()
+        .flat_map(|m| [m.project_id.as_str(), m.name.as_str()])
+        .collect();
+
+    // The pack's registry vocab (for grounding).
+    let dump_path = instance_dir(&instance_id).join("anvil-registry.json");
+    let vocab = if let Ok(raw) = std::fs::read_to_string(&dump_path) {
+        #[derive(serde::Deserialize)]
+        struct DumpFile { vocab: crate::registry::RegistryVocab }
+        serde_json::from_str::<DumpFile>(&raw).map(|d| d.vocab).unwrap_or_default()
+    } else {
+        crate::registry::RegistryVocab::default()
+    };
+
+    // Per-intent check: budget + capabilities + grounding. Each origin's
+    // budget validates against its own `density` field when set, otherwise
+    // falls back to the batch-level `density` (which expresses the user's
+    // AVERAGE vibe — individual origins are encouraged to deviate around it
+    // so e.g. a Fresher feels lighter than a Porter within the same set).
+    let mut all_issues: Vec<serde_json::Value> = Vec::new();
+    for (idx, intent) in intents.iter().enumerate() {
+        let effective = intent.density.unwrap_or(density);
+        let issues = check_origin_intent(intent, effective, &mod_ids, &vocab);
+        for iss in &issues {
+            all_issues.push(serde_json::json!({
+                "origin_index": idx,
+                "origin_name": intent.name.as_str(),
+                "effective_density": format!("{effective:?}"),
+                "issue": iss.to_string(),
+            }));
+        }
+    }
+    // Batch average check — the user's chosen `density` is the AVERAGE they
+    // wanted, so the per-origin densities (whatever each intent set or
+    // defaulted to) should land within ±0.6 of it. 1.0=light, 2.0=standard,
+    // 3.0=rich; a batch picked at standard tolerates 1.4..2.6 (so a mix of
+    // light+standard+rich averages fine; an all-rich batch under a
+    // "standard" request rejects, asking the LLM to rebalance).
+    let target = density_score(density);
+    let scores: Vec<f32> = intents.iter()
+        .map(|i| density_score(i.density.unwrap_or(density))).collect();
+    let avg = scores.iter().sum::<f32>() / (scores.len() as f32);
+    if (avg - target).abs() > 0.6 {
+        all_issues.push(serde_json::json!({
+            "origin_index": -1,
+            "origin_name": "<batch>",
+            "issue": format!(
+                "Batch density average is {avg:.2} but the user asked for an average of {target:.2} ({density:?}). \
+                 Re-balance per-origin densities so the average lands within \u{00B1}0.6 of the user's pick. \
+                 Per-origin densities: {scores:?}"
+            ),
+        }));
+    }
+    if !all_issues.is_empty() {
+        tool_chip(tx, "generate_origin_intents", "blocked: invalid");
+        return Ok(format!(
+            "generate_origin_intents refused to write: {} issue(s). Fix EXACTLY these and call \
+             generate_origin_intents again with the corrected full set:\n{}",
+            all_issues.len(),
+            serde_json::to_string(&all_issues)?,
+        ));
+    }
+
+    // All intents check clean. Emit each via emit_perk and aggregate.
+    let mut all_origins: Vec<Origin> = Vec::new();
+    let mut all_powers: Vec<crate::origins::Power> = Vec::new();
+    let mut companion = CompanionMcFunctions::new();
+    // Per-origin seed-advancement ids emitted by any OriginQuestline perk.
+    // Surfaced in the result so the curator references the EXACT id when
+    // authoring the optional per-origin quest branch (no slug-guessing).
+    let mut seed_map: Vec<(String, String)> = Vec::new();
+    for (idx, intent) in intents.iter().enumerate() {
+        let slug = format!("o{idx:02}_{}", sanitize_slug(intent.name.as_str()));
+        let mut ctx = EmitContext::new(slug.clone());
+        let mut origin_power_refs: Vec<String> = Vec::new();
+        for perk in &intent.perks {
+            if let crate::origins::PerkIntent::OriginQuestline { chapter_seed } = perk {
+                seed_map.push((
+                    intent.name.as_str().to_string(),
+                    format!("anvil:origins/{slug}/seed_{}", chapter_seed.as_str()),
+                ));
+            }
+            let e = match emit_perk(perk, &mut ctx) {
+                Ok(e) => e,
+                Err(why) => return Ok(format!(
+                    "generate_origin_intents: origin `{}` perk emit failed: {why}. \
+                     This is an engine bug — please report.",
+                    intent.name.as_str(),
+                )),
+            };
+            all_powers.extend(e.local_powers);
+            origin_power_refs.extend(e.origin_refs);
+            companion.extend_from(e.mcfunctions);
+        }
+        // Impact derives from each origin's ACTUAL content via its
+        // forecast (active + lifetime + passive count), not the batch
+        // density. The batch density sets the budget; the per-origin
+        // impact reflects how full of mechanics this specific origin
+        // ended up. Stops six origins from all showing as MODERATE
+        // just because the batch was authored at density=standard.
+        let forecast = crate::origins::forecast_origin_capabilities(intent);
+        let total = forecast.passives as u32
+            + forecast.actives as u32
+            + forecast.lifetimes as u32;
+        let impact: i64 = if forecast.lifetimes >= 1 || total >= 8 {
+            3 // ●●● HIGH — has a once-per-lifecycle moment or 8+ perks
+        } else if forecast.actives >= 1 || total >= 5 {
+            2 // ●●○ MODERATE — has an active or 5+ perks
+        } else {
+            1 // ●○○ LOW — pure-passive light origin
+        };
+        all_origins.push(Origin {
+            id: slug,
+            name: intent.name.as_str().to_string(),
+            description: intent.description.as_str().to_string(),
+            powers: origin_power_refs,
+            icon: intent.icon.as_str().to_string(),
+            impact,
+            order: idx as i64,
+        });
+    }
+
+    let set = OriginsSet { origins: all_origins, powers: all_powers };
+    let validated = match validate(set) {
+        Ok(v) => v,
+        Err(errs) => {
+            tool_chip(tx, "generate_origin_intents", "blocked: validator");
+            return Ok(format!(
+                "generate_origin_intents validator rejected the emitted set: {} issue(s). \
+                 The intent layer should have caught these; please report. \
+                 Issues: {}",
+                errs.len(),
+                serde_json::to_string(&crate::origins::errors_to_json(&errs))?
+            ));
+        }
+    };
+
+    write_validated_origins_with_companion(
+        &instance_dir(&instance_id),
+        "anvil",
+        &validated,
+        &companion,
+    ).with_context(|| format!("writing intent-authored origins for instance {instance_id}"))?;
+    if let Some(tid) = thread_id {
+        crate::chat::mark_origins_authored(tid);
+    }
+
+    let s = validated.get();
+    tool_chip(tx, "generate_origin_intents", "done");
+    // Advance to ITERATING ONLY if quests already exist — so an origins-FIRST
+    // pack stays in progression and authors its quests under the rich spec. A
+    // quests-then-origins pack is already in iterating (quest-final advanced it)
+    // so this is idempotent; an origins-then-quests pack advances on quest-final.
+    if quests_authored(&instance_id) {
+        let _ = tx.send(CuratorEvent::Phase("iterating".to_string()));
+    }
+    // Surface the seed-advancement ids so the curator can gate an OPTIONAL
+    // per-origin quest branch on them in generate_quests. The branch entry
+    // quest takes an `advancement` task with EXACTLY this id (and a dep on a
+    // main-line quest for the branch-off point); only that origin's players
+    // earn it, so only they can walk the branch.
+    let seed_block = if seed_map.is_empty() {
+        String::new()
+    } else {
+        let lines: String = seed_map.iter()
+            .map(|(name, id)| format!("\n  - {name}: {id}"))
+            .collect();
+        format!(
+            "\nSEED ADVANCEMENTS (origin_questline gates) — use the EXACT id in an \
+             optional branch entry's `advancement` task:{lines}"
+        )
+    };
+    Ok(format!(
+        "{gate_caveat}generate_origin_intents: wrote {} origin(s), {} power file(s), {} companion \
+         mcfunction(s) to instance {instance_id}. The Origins datapack is valid; tick.json/load.json \
+         function tags wired. Replaces any prior set.{seed_block}",
+        s.origins.len(),
+        s.powers.len(),
+        companion.files.len(),
+    ))
+}
+
+/// Map a Density to its numeric score for batch-average arithmetic.
+/// Light=1.0, Standard=2.0, Rich=3.0. The batch validator computes the
+/// mean of per-origin scores and rejects if it strays >0.6 from the
+/// user-requested average.
+fn density_score(d: crate::origins::Density) -> f32 {
+    match d {
+        crate::origins::Density::Light    => 1.0,
+        crate::origins::Density::Standard => 2.0,
+        crate::origins::Density::Rich     => 3.0,
+    }
+}
+
+/// Slug from a free-text name: lowercase ASCII, collapse runs of non-id
+/// characters into `_`, trim leading/trailing `_`. Keeps the curator's
+/// per-origin id stable across emits.
+fn sanitize_slug(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_underscore = true;
+    for ch in s.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_underscore = false;
+        } else if !prev_underscore {
+            out.push('_');
+            prev_underscore = true;
+        }
+    }
+    out.trim_matches('_').to_string()
 }
 
 /// The dir-scoped on-disk side of a successful edit: (a) prune jars no longer
@@ -4154,47 +5096,70 @@ async fn tool_edit_pack_inner(
     // Modrinth version_id — we resolve the newest satisfying version below.
     let mut add: Vec<ModRef> = Vec::new();
     let mut add_reqs: Vec<Option<String>> = Vec::new();
-    if let Some(arr) = input.get("add").and_then(Value::as_array) {
-        for item in arr {
-            let Some(pid) = item.get("project_id").and_then(Value::as_str)
-            else {
-                return Ok("edit_pack: every `add` entry needs a string \
-                     `project_id` (plus an optional `version_id` OR \
-                     `version_req` like \">=1.2.3\"). Fix and call edit_pack \
-                     again."
-                    .to_string());
-            };
-            add.push(ModRef {
-                project_id: pid.to_string(),
-                version_id: item
-                    .get("version_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            });
-            add_reqs.push(
-                item.get("version_req")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-                    .filter(|s| !s.trim().is_empty()),
-            );
-        }
-    }
-    let remove: Vec<String> = input
-        .get("remove")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .filter_map(Value::as_str)
+    for item in &array_field(input, "add") {
+        let Some(pid) = item.get("project_id").and_then(Value::as_str) else {
+            return Ok("edit_pack: every `add` entry needs a string \
+                 `project_id` (plus an optional `version_id` OR \
+                 `version_req` like \">=1.2.3\"). Fix and call edit_pack \
+                 again."
+                .to_string());
+        };
+        add.push(ModRef {
+            project_id: pid.to_string(),
+            version_id: item
+                .get("version_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        });
+        add_reqs.push(
+            item.get("version_req")
+                .and_then(Value::as_str)
                 .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
+                .filter(|s| !s.trim().is_empty()),
+        );
+    }
+    let mut remove: Vec<String> = array_field(input, "remove")
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
 
     if add.is_empty() && remove.is_empty() {
+        // Distinguish a genuinely empty call from a MALFORMED one: the model
+        // sometimes sends `add`/`remove` as a stringified JSON array that
+        // didn't coerce (or the wrong shape). Silently saying "nothing to do"
+        // made the curator believe a batch repin succeeded and escalate to
+        // deleting content — so a present-but-unusable field is a hard,
+        // actionable error, not a no-op.
+        if field_present(input, "add") || field_present(input, "remove") {
+            return Ok("edit_pack: `add`/`remove` must each be a JSON ARRAY, \
+                 e.g. add:[{\"project_id\":\"P7dR8mSH\",\"version_req\":\
+                 \">=0.92.2\"}] — NOT a string, object, or stringified array. \
+                 Nothing was changed. Resend with real arrays."
+                .to_string());
+        }
         return Ok("edit_pack: nothing to do — give at least one `add` \
              ([{project_id, version_id?}]) or one `remove` ([project_id])."
             .to_string());
+    }
+
+    // Resolve each remove target to its CANONICAL project_id. The inner matcher
+    // matches a slug against the jar-stem tokens, but a MULTI-TOKEN slug whose
+    // jar filename interleaves those tokens with version numbers is still a
+    // silent no-op (live: `fabric-seasons-delight-refabricated-compat` vs the
+    // jar `...-refabricated-1.20.1-2.2.0+refabricated-compat-1.0.jar`). Looking
+    // the slug up on Modrinth yields the exact project_id the instance stores,
+    // so the matcher hits on `project_id == r`. Best-effort: a failed lookup
+    // (offline / deleted / a bare jar name) just leaves the slug heuristic.
+    {
+        let targets: Vec<String> = remove.clone();
+        for t in &targets {
+            if let Ok(p) = mr.project(t).await {
+                if !remove.iter().any(|r| r == &p.id) {
+                    remove.push(p.id);
+                }
+            }
+        }
     }
 
     // Don't downgrade the phase mid-repair-loop. When a verification/quests
@@ -4555,7 +5520,7 @@ async fn tool_generate_quests(
     // crash class the client smoke is blind to) AND ground on the real
     // runtime registry. Idempotent (DumpReconciled cache fast-path), so the
     // per-batch cost is one boot total, not one per call.
-    let gate_caveat = match world_gen_gate(&inst, mr, tx).await {
+    let gate_caveat = match verify_gate(&inst, mr, tx).await {
         GateVerdict::Verified => String::new(),
         GateVerdict::Unverified(why) => format!(
             "NOTE: this pack is UNVERIFIED — the world-creation boot could \
@@ -4610,7 +5575,7 @@ async fn tool_generate_quests(
                 "generate_quests: instance {instance_id} has recipe- or content-facet quest \
                  node(s) but does not include Open Loader, so the custom-recipe / provisioned-\
                  content datapack would never load. Recover: add it in place with edit_pack \
-                 (project \"open-loader\", 1.20.1 fabric/forge), re-verify, then call \
+                 (project \"open-loader\", 1.20.1 Fabric), re-verify, then call \
                  generate_quests again."
             ));
         }
@@ -4683,6 +5648,49 @@ async fn tool_generate_quests(
         ));
     }
 
+    // Seed cross-check (hard, every call): an optional per-origin branch gates
+    // its entry on a seed advancement (`anvil:origins/<slug>/seed_<x>`) that the
+    // matching origin's `origin_questline` perk grants. If a quest references a
+    // seed that NO origin actually emits, the branch silently never unlocks for
+    // anyone — exactly the "ship a broken pack" class. Block it (verify, don't
+    // theorize). `anvil:` ids are tier-2 authored so grounding alone won't catch
+    // this; the on-disk advancement file is the source of truth.
+    {
+        let mut dangling: Vec<(String, String)> = Vec::new();
+        for ch in &graph.chapters {
+            for q in &ch.quests {
+                for t in &q.tasks {
+                    if let crate::quest::QuestTask::Advancement { id } = t {
+                        let is_seed = id.starts_with("anvil:origins/")
+                            && id.rsplit('/').next()
+                                .map_or(false, |s| s.starts_with("seed_"));
+                        if is_seed
+                            && !crate::origins::seed_advancement_emitted(
+                                &instance_dir(&instance_id), id)
+                        {
+                            dangling.push((q.title.clone(), id.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        if !dangling.is_empty() {
+            tool_chip(tx, "generate_quests", "blocked: dangling origin seed");
+            let lines: String = dangling.iter()
+                .map(|(t, id)| format!("\n  - quest \"{t}\" gates on {id}"))
+                .collect();
+            return Ok(format!(
+                "generate_quests refused to write: {} optional origin branch(es) gate on a seed \
+                 advancement that NO origin emits, so they would never unlock for anyone.{lines}\n\
+                 Fix: give the matching origin an `origin_questline` perk with that chapter_seed via \
+                 generate_origin_intents FIRST (its result lists the EXACT seed id to use), then \
+                 re-run generate_quests. Or drop the advancement task if the branch should not be \
+                 origin-gated.",
+                dangling.len(),
+            ));
+        }
+    }
+
     write_quests(&graph, &instance_dir(&instance_id))
         .with_context(|| format!("writing quests for instance {instance_id}"))?;
 
@@ -4744,7 +5752,7 @@ async fn tool_generate_quests(
     };
 
     if is_final {
-        let _ = tx.send(CuratorEvent::Phase("complete".to_string()));
+        let _ = tx.send(CuratorEvent::Phase("iterating".to_string()));
         Ok(format!(
             "{gate_caveat}Questline complete: {quest_count} quests across {chapter_count} chapter(s) written to instance {instance_id}.{warn}"
         ))
@@ -4852,13 +5860,20 @@ async fn analyze_crash(
         crash.to_string()
     };
     let sys = "You are a Minecraft Fabric 1.20.1 crash analyst. Given a crash \
-        log and the pack's mod list, identify the SINGLE most likely culprit \
-        mod and the root cause. Reply with ONLY a JSON object, no prose: \
-        {\"culprit_mod\":\"<id or name from the list, or empty>\",\
+        log and the pack's mod list, name the culprit mod ONLY IF the log shows \
+        a specific mod's class, entrypoint, or mixin actually failing. If the \
+        log shows no such mod-attributable error, you MUST return culprit_mod \
+        empty and say the cause is not identifiable from this log — do NOT \
+        guess from mod names that merely appear in benign 'Error loading \
+        class' / '@Mixin target not found' probe lines. Reply with ONLY a JSON \
+        object, no prose: \
+        {\"culprit_mod\":\"<id or name from the list, or empty if not \
+        attributable>\",\
         \"root_class\":\"missing_dep|version_break|runtime_mixin|other\",\
         \"one_line\":\"<one sentence, plain>\",\
         \"recommendation\":\"<the concrete fix, e.g. remove <mod>, or pin \
-        <lib> older>\"}";
+        <lib> older; or 're-run verify to capture the crash' if not \
+        attributable>\"}";
     let user = format!(
         "Mod list ({} mods): {}\n\n---- crash ----\n{}",
         mods.len(),
@@ -4943,12 +5958,15 @@ async fn tool_verify_pack(
     // The world-gen server boot — reaches spawn-region generation (the
     // world-creation crash class the old title-screen client smoke was blind
     // to) AND captures the real runtime registry.
-    match world_gen_gate(&inst, mr, tx).await {
+    match verify_gate(&inst, mr, tx).await {
         GateVerdict::Verified => {
             tool_chip(tx, "verify_pack", "clean");
-            Ok("VERIFIED: the pack booted a server that generated a world \
-                cleanly, and its real runtime registry is now grounded. Tell \
-                the player the pack is confirmed working."
+            Ok("VERIFIED: the pack passed the client smoke test — it boots \
+                past mod init without crashing. (Stage 2 / headless world-gen \
+                is currently disabled while a host-side dyld issue is being \
+                investigated, so the registry is the static jar scan rather \
+                than a live dump.) Tell the player the pack is good to launch; \
+                the progression phase is now unlocked."
                 .to_string())
         }
         GateVerdict::Unverified(why) => {
@@ -4979,6 +5997,86 @@ async fn tool_verify_pack(
     }
 }
 
+/// Diagnose a crash the PLAYER hit while playing (world creation / world load
+/// / in-game). Sources the crash text deterministically — a pasted `crash_text`
+/// wins (the player may copy it from elsewhere), else the newest on-disk crash
+/// report, else the captured boot log / latest.log — and runs the SAME grounded
+/// cascade the verify gate uses (`stage1_from_crash` → classify / jar-attribute
+/// / runtime-chain / gate). Diagnose-only: it returns the culprit + ordered fix
+/// for the curator to apply with edit_pack, it never mutates the pack itself.
+async fn tool_diagnose_crash(
+    input: &Value,
+    tx: &UnboundedSender<CuratorEvent>,
+) -> anyhow::Result<String> {
+    let instance_id = str_field(input, "instance_id")?.to_string();
+    let inst = load_instances()
+        .into_iter()
+        .find(|i| i.id == instance_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "diagnose_crash: no instance {instance_id}. Pass the id from \
+                 ACTIVE PACK STATE."
+            )
+        })?;
+    tool_chip(tx, "diagnose_crash", "reading crash report");
+
+    let pasted = opt_str_field(input, "crash_text")
+        .map(str::to_string)
+        .filter(|s| s.trim().len() > 40);
+    let crash = pasted
+        .or_else(|| newest_crash_report(&instance_id))
+        .or_else(|| newest_boot_log(&instance_id))
+        .or_else(|| {
+            std::fs::read_to_string(
+                instance_dir(&instance_id).join("logs").join("latest.log"),
+            )
+            .ok()
+        })
+        .filter(|s| s.trim().len() > 40);
+
+    let Some(crash) = crash else {
+        tool_chip(tx, "diagnose_crash", "no crash on disk");
+        return Ok(format!(
+            "diagnose_crash: no crash report is on disk for instance \
+             {instance_id}, and no crash_text was provided. Ask the player to \
+             paste the crash log (the red text the game shows, or the newest \
+             file in the instance's crash-reports folder) and call \
+             diagnose_crash again with it in `crash_text`."
+        ));
+    };
+
+    let (culprit, core) = stage1_from_crash(&crash, &inst).await;
+    tool_chip(
+        tx,
+        "diagnose_crash",
+        culprit.as_deref().unwrap_or("diagnosed"),
+    );
+    Ok(format!(
+        "{core}\n\nApply this now with edit_pack on instance \"{instance_id}\" \
+         (repin the named mod/dependency FIRST; add a missing one; remove a mod \
+         only as the LAST resort), then tell the player exactly what changed \
+         and ask them to re-launch and confirm. The culprit named above came \
+         from the crash itself (the crash report plus an installed-jar scan), \
+         NOT a guess — trust it over any theory of your own about which mod is \
+         at fault."
+    ))
+}
+
+/// True once at least one Heracles quest file exists for the instance — i.e.
+/// the questline (the deep content authored under the PROGRESSION prompt's full
+/// chapter/tier/DAG spec) has been started. Gates the origins → iterating
+/// advance: an origins-FIRST pack must stay in progression so its quests are
+/// later authored under that rich brief, not the thinner iterating one.
+fn quests_authored(instance_id: &str) -> bool {
+    let dir = instance_dir(instance_id).join("config/heracles/quests");
+    std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .any(|e| e.path().extension().is_some_and(|x| x == "json"))
+        })
+        .unwrap_or(false)
+}
+
 /// Newest `crash-reports/*.txt` for an instance, if any.
 fn newest_crash_report(instance_id: &str) -> Option<String> {
     let dir = instance_dir(instance_id).join("crash-reports");
@@ -4994,6 +6092,121 @@ fn newest_crash_report(instance_id: &str) -> Option<String> {
         }
     }
     std::fs::read_to_string(newest?.1).ok()
+}
+
+/// Crash-report filenames present right now. Snapshot this BEFORE a boot so a
+/// post-boot set difference (`crash_report_since`) reveals THIS boot's crash
+/// report — robust against clock skew / same-second writes, unlike mtime.
+fn crash_report_set(
+    instance_id: &str,
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    let dir = instance_dir(instance_id).join("crash-reports");
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            if e.path().extension().is_some_and(|x| x == "txt") {
+                if let Ok(n) = e.file_name().into_string() {
+                    set.insert(n);
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Content of a NON-EMPTY crash report that appeared during a boot (set diff
+/// vs the pre-boot snapshot), newest first. `None` when the boot wrote no
+/// usable report — a 0-byte file (JVM died before flush) is excluded so we
+/// never hand the analyst an empty crash to confabulate from.
+fn crash_report_since(
+    instance_id: &str,
+    before: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let dir = instance_dir(instance_id).join("crash-reports");
+    let mut fresh: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    for e in std::fs::read_dir(&dir).ok()?.flatten() {
+        let p = e.path();
+        if !p.extension().is_some_and(|x| x == "txt") {
+            continue;
+        }
+        let Ok(name) = e.file_name().into_string() else {
+            continue;
+        };
+        if before.contains(&name) {
+            continue; // pre-existing — not from this boot
+        }
+        match e.metadata() {
+            Ok(m) if m.len() > 0 => {
+                fresh.push((
+                    m.modified().unwrap_or(std::time::UNIX_EPOCH),
+                    p,
+                ));
+            }
+            _ => {} // 0-byte (died before flush) or unreadable — skip
+        }
+    }
+    fresh.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    fresh.into_iter().find_map(|(_, p)| std::fs::read_to_string(&p).ok())
+}
+
+/// First *named* Failure line in a crash report → (mod_name, reason). The
+/// crash-report header (`---- Minecraft Crash Report ----`) classifies first
+/// but carries no mod; the `Could not execute entrypoint … provided by '<x>'`
+/// top-level line names the real culprit; the inner `Caused by:` NoClassDef
+/// lines name no mod. So: take the first line that yields a mod_name, else the
+/// first generic crash line (so we still report "it crashed").
+fn classify_crash_report(report: &str) -> Option<(Option<String>, String)> {
+    let mut first_generic: Option<(Option<String>, String)> = None;
+    for l in report.lines() {
+        if let crate::launch::SmokeSignal::Failure { mod_name, reason } =
+            crate::launch::classify_smoke_line(l)
+        {
+            if mod_name.is_some() {
+                return Some((mod_name, reason)); // named culprit wins
+            }
+            first_generic.get_or_insert((mod_name, reason));
+        }
+    }
+    first_generic
+}
+
+/// Stage-1 (culprit, repair-message) from a fresh crash report: prefer the
+/// deterministic top-level culprit (no LLM); fall to the analyst only when no
+/// line classifies. Fixes the class where an onInitialize crash lands in
+/// `crash-reports/*` (not `logs/latest.log`), so the curator can name and
+/// remove the offending mod instead of confabulating or passing it.
+async fn stage1_from_crash(
+    report: &str,
+    inst: &Instance,
+) -> (Option<String>, String) {
+    match classify_crash_report(report) {
+        Some((Some(who), reason)) => {
+            // The report's `Caused by:` chain usually names a MISSING class
+            // owned by an installed-but-version-skewed mod (vinery -> doapi).
+            // Prefer that precise repin target (jar-grounded) over a blunt
+            // "remove who"; fall back to the generic message otherwise.
+            if let Some(grounded) = diagnose_crash_chain(report, Some(inst)) {
+                return (Some(who), grounded);
+            }
+            let core = format!(
+                "Stage 1 client boot CRASHED during mod initialization \
+                 ({reason}). Culprit (from the crash report's top-level \
+                 exception): '{who}' — its initializer threw, which is almost \
+                 always a missing or incompatible integration with another \
+                 mod. Remove '{who}' with edit_pack; or, if it is a \
+                 dependency you actually need, repin the mod it integrates \
+                 with to a matching version. Then re-verify."
+            );
+            (Some(who), core)
+        }
+        Some((None, reason)) => {
+            (None, analyze_or_log(report, inst, &reason).await)
+        }
+        None => (
+            None,
+            analyze_or_log(report, inst, "Stage 1 client boot crashed").await,
+        ),
+    }
 }
 
 async fn tool_query_registry(
@@ -5151,6 +6364,36 @@ mod verify_tests {
     fn unparseable_reply_falls_back_not_panics() {
         let out = format_analyst("the model rambled with no json");
         assert!(out.starts_with("Automated diagnosis (unstructured):"));
+    }
+
+    /// REPRO (Stardew Valleys, 2026-05-21): an onInitialize crash that lands
+    /// in `crash-reports/*` must yield the TOP-LEVEL culprit, not the inner
+    /// `Caused by:` mod. The crash-report header classifies first (no mod);
+    /// the `Could not execute entrypoint … provided by 'another_furniture'`
+    /// line names the real culprit; the inner Create `Caused by:` NoClassDef
+    /// lines name no mod. `classify_crash_report` must return another_furniture.
+    #[test]
+    fn crash_report_names_top_level_entrypoint_culprit() {
+        let report = "---- Minecraft Crash Report ----\n\
+            // But it works on my machine.\n\
+            Description: Initializing game\n\
+            java.lang.RuntimeException: Could not execute entrypoint stage \
+            'main' due to errors, provided by 'another_furniture' at \
+            'com.starfish_studios.another_furniture.fabric.AnotherFurnitureFabric'!\n\
+            \tSuppressed: java.lang.NoClassDefFoundError: \
+            io/github/fabricators_of_create/porting_lib/entity/ExtraSpawnDataEntity\n\
+            Caused by: java.lang.NoClassDefFoundError: \
+            com/simibubi/create/api/behaviour/interaction/MovingInteractionBehaviour\n\
+            Caused by: java.lang.ClassNotFoundException: \
+            com.simibubi.create.api.behaviour.interaction.MovingInteractionBehaviour\n";
+        let (mod_name, _reason) =
+            super::classify_crash_report(report).expect("classifies");
+        assert_eq!(
+            mod_name.as_deref(),
+            Some("another_furniture"),
+            "must name the entrypoint's `provided by` mod, not the inner \
+             Create Caused-by"
+        );
     }
 }
 
@@ -6054,6 +7297,166 @@ mod edit_pack_real_data_tests {
         assert!(r.entries.iter().any(|e| e.project_id == "keep"));
     }
 
+    /// REAL REGRESSION (Harvest Valley): Moonlight is a TRANSITIVE dep keyed on
+    /// its canonical id `twkfQtEc` at the old version `xii6uAID`; the curator
+    /// adds by SLUG "moonlight" pinning the new `CjiDIGjB`. The repin must STICK
+    /// (it reverted, leaving the conflict that forced deleting Supplementaries).
+    #[tokio::test]
+    async fn explicit_repin_of_transitive_dep_by_slug_sticks() {
+        let inst = Instance {
+            id: "t".into(),
+            name: "T".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0".into(),
+            created: "x".into(),
+            last_played: None,
+            mods: vec![
+                pin("supp", "s1"),
+                PinnedMod {
+                    project_id: "twkfQtEc".into(),
+                    version_id: "xii6uAID".into(),
+                    name: "moonlight-1.20-2.13.82-fabric.jar".into(),
+                    path: "mods/moonlight-1.20-2.13.82-fabric.jar".into(),
+                    sha1: String::new(),
+                    sha512: String::new(),
+                    download_url: String::new(),
+                    file_size: 0,
+                    client_side: "required".into(),
+                    server_side: "required".into(),
+                },
+            ],
+            roots: vec!["supp".into()], // moonlight is transitive
+        };
+        let mut vc: VersionCache = std::collections::HashMap::new();
+        vc.insert(
+            "supp".into(),
+            Ok(vec![ver("supp", "s1", "1.20.1", &["twkfQtEc"])]),
+        );
+        // Versions cached under the SLUG key, but their project_id is canonical.
+        vc.insert(
+            "moonlight".into(),
+            Ok(vec![
+                ver("twkfQtEc", "xii6uAID", "1.20.1", &[]),
+                ver("twkfQtEc", "CjiDIGjB", "1.20.1", &[]),
+            ]),
+        );
+        let mut sc: SideCache = std::collections::HashMap::new();
+        let mut scn = std::collections::HashSet::new();
+        let mut prov = std::collections::HashSet::new();
+        let mut man = std::collections::HashMap::new();
+        let mr = Modrinth::new();
+        let add = vec![ModRef {
+            project_id: "moonlight".into(),
+            version_id: "CjiDIGjB".into(),
+        }];
+        let r = edit_instance_mods_with_state(
+            &mr, &inst, &add, &[], &mut vc, &mut sc, &mut scn, &mut prov,
+            &mut man,
+        )
+        .await
+        .expect("ok");
+        let ml = r
+            .entries
+            .iter()
+            .find(|e| e.project_id == "twkfQtEc")
+            .expect("moonlight present");
+        assert_eq!(
+            ml.version_id, "CjiDIGjB",
+            "slug-add repin of a canonical transitive dep must stick, not revert"
+        );
+    }
+
+    /// REAL REGRESSION (Harvest Valley): a Let's Do jar is named
+    /// `letsdo-vinery-fabric-1.4.13.jar` (leads with the maven group `letsdo-`,
+    /// NOT the slug), and its root is the hash id `1DWmBJVA`. `remove ["vinery"]`
+    /// was a silent no-op (slug != id, stem doesn't start `vinery-`), so the
+    /// crashing mod stayed. The slug must match as a jar-stem TOKEN.
+    #[tokio::test]
+    async fn remove_by_slug_matches_token_not_just_filename_prefix() {
+        let inst = Instance {
+            id: "t".into(),
+            name: "T".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15.0".into(),
+            created: "x".into(),
+            last_played: None,
+            mods: vec![
+                PinnedMod {
+                    project_id: "1DWmBJVA".into(),
+                    version_id: "Xv8zHKzi".into(),
+                    name: "letsdo-vinery-fabric-1.4.13.jar".into(),
+                    path: "mods/letsdo-vinery-fabric-1.4.13.jar".into(),
+                    sha1: String::new(),
+                    sha512: String::new(),
+                    download_url: String::new(),
+                    file_size: 0,
+                    client_side: "required".into(),
+                    server_side: "required".into(),
+                },
+                pin("keep", "k1"),
+            ],
+            roots: vec!["1DWmBJVA".into(), "keep".into()],
+        };
+        let pv = [
+            ("1DWmBJVA", ver("1DWmBJVA", "Xv8zHKzi", "1.20.1", &[])),
+            ("keep", ver("keep", "k1", "1.20.1", &[])),
+        ];
+        let r = run(&inst, &[], &["vinery".into()], &pv, Default::default())
+            .await
+            .expect("ok");
+        assert!(
+            !r.entries.iter().any(|e| e.project_id == "1DWmBJVA"),
+            "slug 'vinery' must remove the letsdo-vinery jar"
+        );
+        assert!(!r.noop, "must NOT report 'no change'");
+        assert!(r.entries.iter().any(|e| e.project_id == "keep"));
+    }
+
+    /// REAL REGRESSION (Valley's Edge): the model sent `add` as a STRINGIFIED
+    /// JSON array, so `.as_array()` returned None and every batch repin was a
+    /// silent no-op ("nothing to do") — the curator believed it had repinned
+    /// and escalated to deleting content. `array_field` must coerce it.
+    #[test]
+    fn array_field_coerces_stringified_json_array() {
+        let stringified = serde_json::json!({
+            "add": "[{\"project_id\": \"P7dR8mSH\", \"version_req\": \">=0.92.2\"}]"
+        });
+        let arr = array_field(&stringified, "add");
+        assert_eq!(arr.len(), 1, "stringified add must coerce to one element");
+        assert_eq!(arr[0]["project_id"], "P7dR8mSH");
+        assert_eq!(arr[0]["version_req"], ">=0.92.2");
+        // A real array is unchanged.
+        let real = serde_json::json!({"add": [{"project_id": "X"}]});
+        assert_eq!(array_field(&real, "add").len(), 1);
+        // Absent / null -> empty; field_present tells malformed from absent.
+        assert!(array_field(&serde_json::json!({}), "add").is_empty());
+        assert!(field_present(&stringified, "add"));
+        assert!(!field_present(&serde_json::json!({}), "add"));
+    }
+
+    /// REAL REGRESSION (Valley's Edge had fabric-api ×2, PuzzlesLib ×2): a
+    /// duplicate-modid entry pair must collapse on any edit (Fabric refuses to
+    /// launch on a dup modid; a .mrpack export of the dup set is broken).
+    #[tokio::test]
+    async fn duplicate_modid_entries_are_collapsed() {
+        let inst = instance(
+            &["A", "fabapi"],
+            &[("A", "a1"), ("fabapi", "f1"), ("fabapi", "f1")],
+        );
+        let pv = [
+            ("A", ver("A", "a1", "1.20.1", &[])),
+            ("fabapi", ver("fabapi", "f1", "1.20.1", &[])),
+        ];
+        let r = run(&inst, &[], &["A".into()], &pv, Default::default())
+            .await
+            .expect("ok");
+        let dups =
+            r.entries.iter().filter(|e| e.project_id == "fabapi").count();
+        assert_eq!(dups, 1, "duplicate modid must collapse to one entry");
+    }
+
     /// NEW CONTRACT: remove is LITERAL. Removing A even though B requires it
     /// is NOT refused — no static reverse-dep analysis. The verify boot is
     /// the sole authority (it will report "B requires A which is missing");
@@ -6588,5 +7991,335 @@ mod step4_integration_tests {
              >=0.5.11 <0.6 AND outside Immersive Portals' break); got {}",
             sodium.version_id
         );
+    }
+}
+
+#[cfg(test)]
+mod crash_grounding_tests {
+    use super::*;
+
+    /// Verbatim from instance 18b102987657d2003200's
+    /// `crash-2026-05-19_21.00.09-client.txt`. The LLM analyst blamed
+    /// origins-classes / Dungeons&Taverns; the chain says farmersdelight
+    /// → Porting Lib. Grounding must name Porting Lib and instruct an ADD,
+    /// never a removal of the culprit.
+    #[test]
+    fn fd_refabricated_grounds_to_porting_lib_add() {
+        let log = "\
+[21:00:09] [main/ERROR]: Mods crashed.\n\
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to \
+errors, provided by 'farmersdelight' at 'vectorwing.farmersdelight.FarmersDelight'!\n\
+\tat net.fabricmc.loader.impl.util.ExceptionUtil.gatherExceptions(ExceptionUtil.java:33)\n\
+Caused by: java.lang.NoClassDefFoundError: \
+io/github/fabricators_of_create/porting_lib/config/ConfigType\n\
+\tat knot//vectorwing.farmersdelight.FarmersDelight.onInitialize(FarmersDelight.java:45)\n\
+Caused by: java.lang.ClassNotFoundException: \
+io.github.fabricators_of_create.porting_lib.config.ConfigType\n";
+        let d = diagnose_crash_chain(log, None).expect("must ground");
+        assert!(d.contains("Porting Lib"), "{d}");
+        assert!(d.contains("porting-lib"), "{d}");
+        assert!(d.contains("ADD"), "{d}");
+        assert!(
+            d.contains("Do NOT remove 'farmersdelight'"),
+            "must forbid removing the culprit: {d}"
+        );
+    }
+
+    /// Verbatim from `crash-2026-05-19_14.41.11-client.txt` (the sprout case).
+    #[test]
+    fn sprout_grounds_to_resourceful_config() {
+        let log = "\
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to \
+errors, provided by 'sprout' at 'tech.thatgravyboat.sprout.SproutFabric'!\n\
+Caused by: java.lang.NoClassDefFoundError: \
+com/teamresourceful/resourcefulconfig/common/config/Configurator\n";
+        let d = diagnose_crash_chain(log, None).expect("must ground");
+        assert!(d.contains("Resourceful Config"), "{d}");
+        assert!(d.contains("resourceful-config"), "{d}");
+        assert!(d.contains("ADD"), "{d}");
+    }
+
+    /// The benign-probe guard (fix-3 lineage): a real entrypoint line PLUS
+    /// only harmless `WARN: Error loading class` / `@Mixin target` probes
+    /// (verbatim from the dump logs) must NOT be mistaken for a missing
+    /// class → `None` (falls through to the LLM, not a wrong grounding).
+    #[test]
+    fn benign_class_probes_do_not_false_ground() {
+        // A REAL culprit line IS present, so step 1 succeeds — the guard
+        // under test is step 2: only harmless `WARN: Error loading class` /
+        // `@Mixin target` probes (verbatim from the dump logs) must NOT be
+        // taken as the missing class → `None`, fall through to the LLM,
+        // never a wrong grounding off a benign probe.
+        let log = "\
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to \
+errors, provided by 'somemod' at 'com.example.SomeMod'!\n\
+[15:55:45] [main/WARN]: Error loading class: net/minecraft/class_881 \
+(java.lang.ClassNotFoundException: net/minecraft/class_881)\n\
+[15:55:45] [main/WARN]: @Mixin target net.minecraft.class_525 was not found \
+porting_lib_base.mixins.json:client.CreateWorldScreenMixin from mod porting_lib_base\n";
+        assert!(diagnose_crash_chain(log, None).is_none());
+    }
+
+    #[test]
+    fn no_entrypoint_line_is_not_grounded() {
+        let log = "[12:00:00] [main/INFO]: Loading 40 mods\n\
+[12:00:01] [main/INFO]: Sound engine started\n";
+        assert!(diagnose_crash_chain(log, None).is_none());
+    }
+
+    /// Unmapped library: still grounds to ADD-the-providing-lib + the real
+    /// culprit, never a removal / moving-culprit speculation.
+    #[test]
+    fn unmapped_missing_class_still_grounds_to_add_not_remove() {
+        let log = "\
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to \
+errors, provided by 'somemod' at 'com.example.SomeMod'!\n\
+Caused by: java.lang.NoClassDefFoundError: com/example/unknownlib/CoreThing\n";
+        let d = diagnose_crash_chain(log, None).expect("must ground");
+        assert!(d.contains("com.example.unknownlib.CoreThing"), "{d}");
+        assert!(d.contains("ADD the library that provides"), "{d}");
+        assert!(
+            d.contains("NOT to remove 'somemod'"),
+            "must explicitly forbid removing the culprit: {d}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod repair_progress_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn set(xs: &[&str]) -> HashSet<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    // ---- Layer-4 preventive companion injection ----
+
+    #[test]
+    fn fd_present_porting_lib_absent_injects_porting_lib() {
+        let p = set(&["farmersdelight", "fabric-api", "sodium"]);
+        assert_eq!(missing_companions(&p), vec!["porting-lib"]);
+    }
+
+    #[test]
+    fn fd_with_porting_lib_already_provided_injects_nothing() {
+        // After the fixpoint pins porting_lib, its real modid is provided →
+        // no re-injection (idempotent, fixpoint stabilises).
+        let p = set(&["farmersdelight", "porting_lib", "porting_lib_base"]);
+        assert!(missing_companions(&p).is_empty());
+    }
+
+    #[test]
+    fn no_trigger_injects_nothing() {
+        let p = set(&["sodium", "lithium", "fabric-api"]);
+        assert!(missing_companions(&p).is_empty());
+    }
+
+    // ---- Defect 2: progress-aware budget ----
+
+    #[test]
+    fn signature_is_stable_for_same_essence_and_noise_insensitive() {
+        let a = "GROUNDED: mod 'farmersdelight' missing porting_lib/config \
+                 (line 45) at /tmp/x99";
+        let b = "grounded:  mod 'farmersdelight'   MISSING porting_lib\\config \
+                 (line 7) at /tmp/x12";
+        assert_eq!(repair_signature(a), repair_signature(b));
+        let c = "GROUNDED: mod 'sprout' missing resourcefulconfig";
+        assert_ne!(repair_signature(a), repair_signature(c));
+    }
+
+    #[test]
+    fn different_error_each_boot_never_burns_the_stuck_budget() {
+        // The defect-2 scenario: every boot a NEW issue (previous one fixed).
+        // `same` must stay 1 forever; only `total` climbs.
+        let (mut cnt, mut tot) = (0u32, 0u32);
+        let mut last: Option<String> = None;
+        for sig in ["err-a", "err-b", "err-c", "err-d", "err-e"] {
+            let (c, t) =
+                next_repair_counts(cnt, tot, last.as_deref(), sig);
+            cnt = c;
+            tot = t;
+            last = Some(sig.to_string());
+            assert_eq!(cnt, 1, "a new distinct error is progress, not stuck");
+            assert!(cnt < STAGE_BUDGET, "must never reach the stuck budget");
+        }
+        assert_eq!(tot, 5);
+    }
+
+    #[test]
+    fn same_error_recurring_hits_the_stuck_budget() {
+        let (mut cnt, mut tot) = (0u32, 0u32);
+        let mut last: Option<String> = None;
+        let mut stuck_at = None;
+        for i in 1..=4 {
+            let (c, t) =
+                next_repair_counts(cnt, tot, last.as_deref(), "same-err");
+            cnt = c;
+            tot = t;
+            last = Some("same-err".into());
+            if stuck_at.is_none() && cnt >= STAGE_BUDGET {
+                stuck_at = Some(i);
+            }
+        }
+        assert_eq!(
+            stuck_at,
+            Some(STAGE_BUDGET),
+            "identical failure escalates exactly at STAGE_BUDGET"
+        );
+    }
+
+    #[test]
+    fn oscillation_terminates_via_hard_cap_not_stuck() {
+        // A→B→A→B… never two identical in a row → `same` stays 1, but the
+        // hard cap still bounds it (no unbounded churn).
+        let (mut cnt, mut tot) = (0u32, 0u32);
+        let mut last: Option<String> = None;
+        for i in 0..REPAIR_HARD_CAP {
+            let sig = if i % 2 == 0 { "A" } else { "B" };
+            let (c, t) =
+                next_repair_counts(cnt, tot, last.as_deref(), sig);
+            cnt = c;
+            tot = t;
+            last = Some(sig.to_string());
+            assert!(cnt < STAGE_BUDGET, "oscillation never looks 'stuck'");
+        }
+        assert!(
+            tot >= REPAIR_HARD_CAP,
+            "hard cap is the backstop for non-convergence"
+        );
+    }
+}
+
+#[cfg(test)]
+mod culprit_attribution_tests {
+    use super::*;
+
+    // Real benign probe lines (verbatim shape from the Harvest Valley boot
+    // logs) — these name other mods but are NOT crashes.
+    const BENIGN_ONLY: &str = "\
+[01:34:27] [main/WARN]: Error loading class: net/raphimc/immediatelyfast/feature/core/BatchableBufferSource (java.lang.ClassNotFoundException: net/raphimc/immediatelyfast/feature/core/BatchableBufferSource)\n\
+[01:34:27] [main/WARN]: Error loading class: net/irisshaders/iris/layer/OuterWrappedRenderType (java.lang.ClassNotFoundException: net/irisshaders/iris/layer/OuterWrappedRenderType)\n\
+[01:34:27] [main/WARN]: @Mixin target net.minecraft.class_525 was not found porting_lib_base.mixins.json:client.CreateWorldScreenMixin from mod porting_lib_base\n\
+[01:34:31] [Render thread/WARN]: Failed sysctl call: hw.cpufrequency, Error code: 2\n";
+
+    // Real vinery crash — verbatim key lines from
+    // crash-2026-05-22_01.36.24-client.txt.
+    const VINERY: &str = "\
+java.lang.RuntimeException: Could not execute entrypoint stage 'main' due to errors, provided by 'vinery' at 'satisfyu.vinery.fabric.VineryFabric'!\n\
+\tat net.fabricmc.loader.impl.FabricLoaderImpl.invokeEntrypoints(FabricLoaderImpl.java:407)\n\
+Caused by: java.lang.NoClassDefFoundError: de/cristelknight/doapi/DoApiExpectPlatform\n\
+\tat knot//satisfyu.vinery.registry.BoatAndSignRegistry.init(BoatAndSignRegistry.java:34)\n\
+Caused by: java.lang.ClassNotFoundException: de.cristelknight.doapi.DoApiExpectPlatform\n";
+
+    /// Fix 2: the EXACT Harvest Valley masking case — only benign probes, no
+    /// real crash → no signature → the LLM must NOT be asked to pick a culprit.
+    #[test]
+    fn benign_probes_have_no_crash_signature() {
+        assert!(!has_crash_signature(BENIGN_ONLY));
+    }
+
+    #[test]
+    fn real_vinery_report_has_crash_signature() {
+        assert!(has_crash_signature(VINERY));
+    }
+
+    /// Fix 3: the decoy probe lines that misled the curator are stripped, the
+    /// real `Caused by:` cause survives.
+    #[test]
+    fn strip_benign_drops_decoys_keeps_cause() {
+        let s = strip_benign(VINERY);
+        assert!(s.contains("Could not execute entrypoint"), "{s}");
+        assert!(s.contains("Caused by: java.lang.NoClassDefFoundError"), "{s}");
+        let cleaned = strip_benign(BENIGN_ONLY);
+        assert!(!cleaned.contains("Error loading class:"), "{cleaned}");
+        assert!(!cleaned.contains("@Mixin target"), "{cleaned}");
+    }
+
+    #[test]
+    fn top_frame_skips_loader_returns_mod_class() {
+        assert_eq!(
+            top_frame_class(VINERY).as_deref(),
+            Some("satisfyu.vinery.registry.BoatAndSignRegistry"),
+        );
+    }
+
+    #[test]
+    fn fatal_line_excludes_benign_probe() {
+        assert!(is_fatal_exception_line(
+            "Caused by: java.lang.NoClassDefFoundError: \
+             de/cristelknight/doapi/DoApiExpectPlatform"
+        ));
+        assert!(!is_fatal_exception_line(
+            "[01:34:27] [main/WARN]: Error loading class: \
+             net/irisshaders/iris/X (java.lang.ClassNotFoundException: \
+             net/irisshaders/iris/X)"
+        ));
+    }
+
+    /// REAL DATA (this machine): the missing class attributes to the
+    /// installed-but-skewed `doapi` (a repin), and the full vinery report
+    /// grounds to a doapi-naming diagnosis — never a removal of vinery or an
+    /// unrelated mod. Skipped where the instance is absent (CI / fresh installs)
+    /// so the suite stays hermetic.
+    #[test]
+    fn real_harvest_valley_grounds_vinery_to_doapi() {
+        let id = "18b1bbd46517152888a8";
+        let Some(inst) = crate::instance::load_instances()
+            .into_iter()
+            .find(|i| i.id == id)
+        else {
+            eprintln!("skip: real instance {id} not present");
+            return;
+        };
+        if !instance_dir(id).join("mods").is_dir() {
+            eprintln!("skip: real mods/ for {id} not present");
+            return;
+        }
+        let owner = crate::registry::attribute_class_to_mod(
+            &inst,
+            &instance_dir(id),
+            "de/cristelknight/doapi/DoApiExpectPlatform",
+        )
+        .expect("doapi owns the package");
+        assert_eq!(owner.mod_id, "doapi");
+
+        let d = diagnose_crash_chain(VINERY, Some(&inst)).expect("grounds");
+        assert!(d.contains("doapi"), "{d}");
+        assert!(d.to_lowercase().contains("repin"), "{d}");
+        // The diagnosis must explicitly PROTECT the consumer from removal
+        // (the whole point of jar-grounded attribution over a blunt remove).
+        assert!(
+            d.contains("Do NOT remove 'vinery'"),
+            "must protect the consumer from removal: {d}"
+        );
+    }
+
+    /// REAL DATA: the diagnose_crash TOOL (the iterating-state play-crash path)
+    /// run on a pasted vinery crash against the real Harvest Valley jars grounds
+    /// to doapi + a repin + an edit_pack instruction — the same deterministic
+    /// answer the verify gate gives, now reachable when the player reports an
+    /// in-game / world-creation crash. Skipped where the instance is absent.
+    #[tokio::test]
+    async fn diagnose_crash_tool_grounds_pasted_vinery_to_doapi() {
+        let id = "18b1bbd46517152888a8";
+        let present = crate::instance::load_instances()
+            .into_iter()
+            .any(|i| i.id == id)
+            && instance_dir(id).join("mods").is_dir();
+        if !present {
+            eprintln!("skip: real instance {id} not present");
+            return;
+        }
+        let (tx, _rx) =
+            tokio::sync::mpsc::unbounded_channel::<CuratorEvent>();
+        let input = serde_json::json!({
+            "instance_id": id,
+            "crash_text": VINERY,
+        });
+        let out = tool_diagnose_crash(&input, &tx).await.expect("diagnose ok");
+        assert!(out.contains("doapi"), "{out}");
+        assert!(out.to_lowercase().contains("repin"), "{out}");
+        assert!(out.contains("edit_pack"), "{out}");
     }
 }

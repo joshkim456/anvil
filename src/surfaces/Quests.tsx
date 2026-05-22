@@ -917,24 +917,35 @@ function OriginsViewer({
           {sel.powers.length === 0 ? (
             <div className="card-hint">No powers.</div>
           ) : (
-            sel.powers.map((p, i) => (
-              <div
-                className={
-                  "origins-power" + (p.shipped ? " shipped" : "")
-                }
-                key={i}
-              >
-                <div className="origins-power-head">
-                  <span className="origins-power-name">{p.name}</span>
-                  {p.shipped && (
-                    <span className="origins-power-badge">shipped</span>
+            sel.powers.map((p, i) => {
+              const cls =
+                "origins-power" +
+                (p.shipped ? " shipped" : "") +
+                (p.kind ? ` kind-${p.kind}` : "");
+              const badgeLabel =
+                p.kind === "active"
+                  ? "TOGGLE · G"
+                  : p.kind === "reactive"
+                  ? "ON-HIT"
+                  : p.shipped
+                  ? "shipped"
+                  : null;
+              return (
+                <div className={cls} key={i}>
+                  <div className="origins-power-head">
+                    <span className="origins-power-name">{p.name}</span>
+                    {badgeLabel && (
+                      <span className="origins-power-badge">
+                        {badgeLabel}
+                      </span>
+                    )}
+                  </div>
+                  {p.description && (
+                    <p className="origins-power-desc">{p.description}</p>
                   )}
                 </div>
-                {p.description && (
-                  <p className="origins-power-desc">{p.description}</p>
-                )}
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

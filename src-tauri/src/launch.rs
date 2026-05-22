@@ -265,6 +265,126 @@ pub fn classify_smoke_line(line: &str) -> SmokeSignal {
     SmokeSignal::None
 }
 
+// ---------------------------------------------------------------------------
+// Tier 4: client-side world-join probe
+//
+// `smoke_test` boots the client to the main menu. The success milestone
+// (`Sound engine started` / `OpenAL initialized`) fires BEFORE the player
+// creates a world — so client-side mods that crash on `onJoinWorld`
+// (Inventory Profiles Next 1.10.x kotlin reflection bug; broken mixins
+// that target world-load hooks; data-pack rule loaders) sail through the
+// existing verifier and crash the real user's world creation.
+//
+// `world_join_probe` closes that gap. It boots the same client, adds
+// `--quickPlaySingleplayer <name>` so vanilla auto-creates + joins a
+// throwaway world, and watches for either a post-world-join success line
+// or a client-only crash signature. The crash-reports/ dir is also
+// pre-snapshotted so a brand-new file there at timeout = failed pass.
+// ---------------------------------------------------------------------------
+
+/// Per-line classification specific to the world-join phase. Recognises
+/// crash patterns that ONLY appear during/after the integrated server
+/// hands the world to the client AND the success line that confirms the
+/// client actually rendered into the world.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorldJoinSignal {
+    None,
+    /// Crash detected. `mod_name` when the line names it.
+    Failure { mod_name: Option<String>, reason: String },
+    /// World loaded — the client reached steady-state inside the world.
+    Success,
+}
+
+pub fn classify_world_join_line(line: &str) -> WorldJoinSignal {
+    // ---- failures (most specific first) ----
+    //
+    // IPN 1.10.x kotlin reflection error — the exact signature from the
+    // UCL: Bentham Ultimatum crash report 2026-05-21_00.05.20-client.txt.
+    // Marker the kotlin-stdlib runtime cannot resolve a property that IPN
+    // declares via `@ByPropertyName` — surfaces on every world join.
+    if line.contains("KotlinReflectionInternalError")
+        && line.contains("not resolved in file class")
+    {
+        return WorldJoinSignal::Failure {
+            mod_name: between(line, "file class ", "Kt").map(|s| s.split('.').last().unwrap_or(s).to_string()),
+            reason:
+                "Kotlin reflection mismatch during world-join (a mod's @ByPropertyName delegate failed); \
+                 commonly Inventory Profiles Next 1.10.x with the bundled fabric-language-kotlin."
+                .into(),
+        };
+    }
+    // Any mod's `onJoinWorld` hook throwing — the most general
+    // client-side world-join failure pattern.
+    if line.contains(".onJoinWorld")
+        && (line.contains("Exception") || line.contains("Error"))
+    {
+        let m = between(line, "knot//", ".onJoinWorld")
+            .or_else(|| between(line, "at ", ".onJoinWorld"))
+            .map(|s| s.split('.').next().unwrap_or(s).to_string());
+        return WorldJoinSignal::Failure {
+            mod_name: m,
+            reason: "A client mod threw during onJoinWorld".into(),
+        };
+    }
+    // Mixin/injector crash inside a world-load class — class_310 (Minecraft)
+    // is the client; class_634 (ClientPlayNetworkHandler) is world-join.
+    if (line.contains("at knot//net.minecraft.class_634.method_11120")
+        || line.contains("class_310.method_1481"))
+        && line.contains("Caused by:")
+    {
+        return WorldJoinSignal::Failure {
+            mod_name: None,
+            reason: "Mixin failed inside the client world-join path".into(),
+        };
+    }
+    // The vanilla crash-report write — the same one smoke_test catches,
+    // but at this phase its presence MUST come from world creation or
+    // world-join code (smoke_test already filtered early-boot crashes).
+    if line.contains("---- Minecraft Crash Report ----")
+        || line.contains("Crash report saved to")
+    {
+        return WorldJoinSignal::Failure {
+            mod_name: None,
+            reason: "Crashed during world creation / world-join".into(),
+        };
+    }
+    // ---- probe-implementation gap (NOT a pack failure) ----
+    //
+    // `--quickPlaySingleplayer <name>` only JOINS an existing save; if
+    // the named save doesn't exist (or its level.dat is unreadable) the
+    // client opens to a "Failed to Quick Play / Could not find world
+    // with the provided identifier" error dialog and never enters the
+    // world. This is NOT a mod crash — it's the probe being unable to
+    // exercise the world-join code path at all. Treat it as a distinct
+    // category so the probe driver can fail-fast with a clear reason
+    // rather than wasting the full 300s timeout watching the dialog sit.
+    if line.contains("Failed to Quick Play")
+        || line.contains("Could not find world with the provided identifier")
+    {
+        return WorldJoinSignal::Failure {
+            mod_name: None,
+            reason: "Probe wiring gap: `--quickPlaySingleplayer <name>` cannot create a world — \
+                     the named save must already exist. Bundle a minimal level.dat fixture and \
+                     extract it to `<instance>/saves/anvil_world_probe/` BEFORE calling \
+                     world_join_probe (see verify_gate's Stage 1b note for the three options)."
+                .into(),
+        };
+    }
+    // ---- success: the genuine post-world-loaded milestone ----
+    //
+    // 1.20.1 vanilla writes "Preparing spawn area: " repeatedly during
+    // world chunk-prep; "Loaded the worlds" is what the integrated
+    // server logs once the player has fully entered. Both are safe to
+    // treat as "the client survived world join and is in-world".
+    if line.contains("Loaded the worlds")
+        || line.contains("Time elapsed:")  // chunk-prep timing line, post-spawn
+        || (line.contains("Preparing spawn area") && line.contains("100%"))
+    {
+        return WorldJoinSignal::Success;
+    }
+    WorldJoinSignal::None
+}
+
 /// True for the Fabric mod-RESOLUTION reject class (the loader refuses to
 /// start because deps can't be satisfied) as opposed to a runtime / world-gen
 /// crash. The resolution reject is followed by a structured remediation block
@@ -495,6 +615,32 @@ pub enum DumpOutcome {
 /// Boot the pack once and watch for an early failure vs the mods-initialized
 /// milestone. Reuses the exact `launch` preparation path. Kills the process
 /// as soon as there is a verdict (or on timeout).
+/// Open a fresh `<instance>/.verify-logs/boot-NNN.log` for the audit tee that
+/// captures a verify boot's full stdout (the complete, untruncated crash
+/// source). Prunes to the most recent ~12 boots. Best-effort: returns `None`
+/// (capture skipped, never fatal) if the dir/file can't be created.
+fn open_boot_log(inst_dir: &Path) -> Option<std::fs::File> {
+    let dir = inst_dir.join(".verify-logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    let mut existing: Vec<(u64, std::path::PathBuf)> = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = p.file_name()?.to_str()?.to_string();
+            let n = name.strip_prefix("boot-")?.strip_suffix(".log")?;
+            n.parse::<u64>().ok().map(|num| (num, p))
+        })
+        .collect();
+    existing.sort_by_key(|(n, _)| *n);
+    let next = existing.last().map(|(n, _)| n + 1).unwrap_or(1);
+    while existing.len() > 11 {
+        let (_, p) = existing.remove(0);
+        let _ = std::fs::remove_file(p);
+    }
+    std::fs::File::create(dir.join(format!("boot-{next:03}.log"))).ok()
+}
+
 pub async fn smoke_test(
     instance: &Instance,
     account: &MinecraftAccount,
@@ -513,7 +659,19 @@ pub async fn smoke_test(
             .context("auto-provisioning a JRE")?,
     };
     let _ = tx.send(LaunchEvent::Status("Smoke test: booting pack".into()));
-    let args = build_command_args(instance, account, &prepared)?;
+    let mut args = build_command_args(instance, account, &prepared)?;
+    // SMOKE-ONLY: force AWT headless. On a mod-RESOLUTION failure ("Incompatible
+    // mods found") Fabric otherwise opens a BLOCKING Swing dialog and waits for
+    // the user to click Exit — a verify boot must never wait on a modal window
+    // (it writes no crash report, so the drain loop would hang on it until the
+    // 150s timeout). Headless makes Fabric print the remediation to the console
+    // and exit on its own, so we capture the full block and the JVM closes. It
+    // also avoids the macOS AWT/GLFW main-thread conflict; GLFW/OpenGL/OpenAL are
+    // unaffected, so a normal boot still reaches the menu. JVM arg → before the
+    // main class.
+    if let Some(pos) = args.iter().position(|a| a == &prepared.main_class) {
+        args.insert(pos, "-Djava.awt.headless=true".into());
+    }
     let inst_dir = instance_dir(&instance.id);
     tokio::fs::create_dir_all(&inst_dir).await.ok();
 
@@ -559,23 +717,61 @@ pub async fn smoke_test(
     }
     drop(ltx);
 
+    // Audit + Fix 1: tee the FULL boot stdout to a per-boot log AND do not bail
+    // on the first failure line. Minecraft prints the crash-report HEADER (which
+    // names no mod) BEFORE the `Could not execute entrypoint … provided by
+    // '<mod>'` culprit line; the old "return on first Failure + kill" lost that
+    // name and truncated both `latest.log` and the crash `.txt` mid-write. Now
+    // we keep draining until the report finishes (`Crash report saved to`) or
+    // the stream ends, upgrading to the NAMED culprit when it appears.
+    let mut boot_log = open_boot_log(&inst_dir);
     let verdict = {
+        use std::io::Write;
         let scan = async {
+            let mut crash: Option<(Option<String>, String)> = None;
             while let Some(line) = lrx.recv().await {
+                if let Some(f) = boot_log.as_mut() {
+                    let _ = writeln!(f, "{line}");
+                }
                 let sig = classify_smoke_line(&line);
+                let saved = line.contains("Crash report saved to");
                 let _ = tx.send(LaunchEvent::Log(line));
                 match sig {
                     SmokeSignal::Failure { mod_name, reason } => {
-                        return SmokeVerdict::Failed { mod_name, reason }
+                        // Prefer a NAMED culprit; otherwise keep the first
+                        // failure (e.g. the headerless crash-report line).
+                        let upgrade = match &crash {
+                            Some((Some(_), _)) => false, // already have a name
+                            _ => mod_name.is_some() || crash.is_none(),
+                        };
+                        if upgrade {
+                            crash = Some((mod_name, reason));
+                        }
                     }
-                    SmokeSignal::Success => return SmokeVerdict::Ok,
-                    SmokeSignal::None => {}
+                    // Only a crash-free boot may pass.
+                    SmokeSignal::Success if crash.is_none() => {
+                        return SmokeVerdict::Ok
+                    }
+                    _ => {}
+                }
+                // The crash report has fully flushed — safe to conclude with the
+                // best culprit we captured (the .txt is now complete too).
+                if saved {
+                    if let Some((mod_name, reason)) = crash {
+                        return SmokeVerdict::Failed { mod_name, reason };
+                    }
                 }
             }
-            // Stream ended with no decisive line: use the exit code.
-            SmokeVerdict::Inconclusive {
-                reason: "the game exited before mods finished initializing"
-                    .into(),
+            // Stream ended (JVM exited). A captured crash with no trailing
+            // "saved to" line (e.g. a resolution reject) still fails here.
+            match crash {
+                Some((mod_name, reason)) => {
+                    SmokeVerdict::Failed { mod_name, reason }
+                }
+                None => SmokeVerdict::Inconclusive {
+                    reason: "the game exited before mods finished initializing"
+                        .into(),
+                },
             }
         };
         // Generous: JVM + 200-mod init on first run. Preparation/downloads
@@ -594,6 +790,144 @@ pub async fn smoke_test(
     // Always reap the child — a smoke test must never leave a real game open.
     let _ = child.start_kill();
     let _ = child.wait().await;
+    Ok(verdict)
+}
+
+/// The verdict from `world_join_probe`. Mirrors `SmokeVerdict` so the
+/// verify-gate caller can treat both the same way (proceed on Ok, surface
+/// repair payload on Failed, caveat on Inconclusive).
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorldJoinVerdict {
+    Ok,
+    Failed { mod_name: Option<String>, reason: String },
+    Inconclusive { reason: String },
+}
+
+/// Boot the client with `--quickPlaySingleplayer` and watch for
+/// world-join failure vs the in-world success milestone. Closes the
+/// IPN-class crash gap that `smoke_test` cannot detect (smoke_test
+/// returns Ok at the main menu, BEFORE world creation runs).
+pub async fn world_join_probe(
+    instance: &Instance,
+    account: &MinecraftAccount,
+    java_path: Option<String>,
+    tx: UnboundedSender<LaunchEvent>,
+) -> Result<WorldJoinVerdict> {
+    loader_unsupported_bail(&instance.loader)?;
+    if let Some(p) = &java_path {
+        check_java(p).await?;
+    }
+    let prepared = prepare_inner(instance, &tx).await?;
+    let java = match java_path {
+        Some(p) => p,
+        None => provision_jre(prepared.java_major, &tx)
+            .await
+            .context("auto-provisioning a JRE for world-join probe")?,
+    };
+    let _ = tx.send(LaunchEvent::Status(
+        "World-join probe: booting + auto-creating throwaway world".into(),
+    ));
+    let mut args = build_command_args(instance, account, &prepared)?;
+    // vanilla 1.20.1 quick-play flags: --quickPlaySingleplayer <save name>
+    // auto-creates the world if missing and joins it immediately. We name
+    // it predictably so the probe can clean up later if it ever wants to.
+    args.push("--quickPlaySingleplayer".to_string());
+    args.push("anvil_world_probe".to_string());
+    let inst_dir = instance_dir(&instance.id);
+    tokio::fs::create_dir_all(&inst_dir).await.ok();
+
+    // Pre-snapshot crash-reports/ so a NEW file at exit = a real crash
+    // missed by stdout scanning (some crashes write the file but the
+    // logger flushes after our process kill).
+    let crash_dir = inst_dir.join("crash-reports");
+    let prior_crashes: std::collections::BTreeSet<std::ffi::OsString> = if crash_dir.is_dir() {
+        std::fs::read_dir(&crash_dir)
+            .map(|d| d.filter_map(|e| e.ok().map(|e| e.file_name())).collect())
+            .unwrap_or_default()
+    } else { std::collections::BTreeSet::new() };
+
+    let _jvm_guard = jvm_lock().lock().await;
+    let mut child = tokio::process::Command::new(&java)
+        .args(&args)
+        .current_dir(&inst_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn java for world-join probe ({java})"))?;
+
+    let (ltx, mut lrx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    if let Some(out) = child.stdout.take() {
+        let ltx = ltx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(out).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                if ltx.send(l).is_err() { break; }
+            }
+        });
+    }
+    if let Some(err) = child.stderr.take() {
+        let ltx = ltx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(err).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                if ltx.send(l).is_err() { break; }
+            }
+        });
+    }
+    drop(ltx);
+
+    let verdict = {
+        let scan = async {
+            while let Some(line) = lrx.recv().await {
+                let sig = classify_world_join_line(&line);
+                let _ = tx.send(LaunchEvent::Log(line));
+                match sig {
+                    WorldJoinSignal::Failure { mod_name, reason } => {
+                        return WorldJoinVerdict::Failed { mod_name, reason };
+                    }
+                    WorldJoinSignal::Success => return WorldJoinVerdict::Ok,
+                    WorldJoinSignal::None => {}
+                }
+            }
+            WorldJoinVerdict::Inconclusive {
+                reason: "process exited before world-join verdict line".into(),
+            }
+        };
+        // Allow time for: JVM warm-up, mods init, world generation, spawn-prep.
+        // Generously sized for a 50+ mod pack on a typical machine.
+        match tokio::time::timeout(std::time::Duration::from_secs(300), scan).await {
+            Ok(v) => v,
+            Err(_) => WorldJoinVerdict::Inconclusive {
+                reason: "no world-loaded signal within 300s".into(),
+            },
+        }
+    };
+
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+
+    // If stdout scanning didn't catch a crash but a new crash-reports/
+    // file appeared, that IS the crash — upgrade Inconclusive → Failed.
+    if matches!(verdict, WorldJoinVerdict::Inconclusive { .. } | WorldJoinVerdict::Ok) {
+        if let Ok(entries) = std::fs::read_dir(&crash_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if !prior_crashes.contains(&name) {
+                    let path = entry.path();
+                    let snippet = std::fs::read_to_string(&path).ok()
+                        .map(|s| s.lines().take(20).collect::<Vec<_>>().join("\n"))
+                        .unwrap_or_else(|| format!("crash report at {}", path.display()));
+                    return Ok(WorldJoinVerdict::Failed {
+                        mod_name: None,
+                        reason: format!(
+                            "Crashed during world-join (crash-reports/{}). First lines:\n{snippet}",
+                            name.to_string_lossy(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
     Ok(verdict)
 }
 
@@ -737,6 +1071,10 @@ async fn drive_dump_server(
     grace: std::time::Duration,
     timeout: std::time::Duration,
     wait_for_jvm: bool,
+    // macOS: a jna-5.14.0 jar to put on `-Xbootclasspath/a:` so it shadows
+    // the Mojang bundler's self-extracted JNA 5.12.1 (which hard-aborts the
+    // JVM here). `None` off macOS / when the one-time fetch failed.
+    jna_boot: Option<std::path::PathBuf>,
     tx: &UnboundedSender<LaunchEvent>,
 ) -> Result<DumpOutcome> {
     // Single-JVM guard (the OOM defense — two modded JVMs co-booting OOMs an
@@ -761,7 +1099,23 @@ async fn drive_dump_server(
     };
 
     let _ = tx.send(LaunchEvent::Status("Booting headless registry server".into()));
-    let mut child = match tokio::process::Command::new(java)
+    let mut cmd = tokio::process::Command::new(java);
+    // macOS: the dump server is `java -jar fabric-server-launcher.jar`; the
+    // Mojang bundler self-extracts its OWN pinned JNA 5.12.1 (sha256
+    // re-verified, so the client path's classpath swap / a file replace can
+    // never reach it) and that old JNA HARD-ABORTS the JVM on modern macOS
+    // (see `ensure_modern_jna_macos`). Boot-classpath classes are resolved by
+    // the bootstrap loader ahead of the bundler's URLClassLoader, so putting
+    // jna-5.14.0 here makes `com.sun.jna.*` load from 5.14.0 and 5.12.1 is
+    // never the one used — without fighting the bundler.
+    if let Some(j) = jna_boot.as_deref() {
+        cmd.arg(format!("-Xbootclasspath/a:{}", j.display()));
+        let _ = tx.send(LaunchEvent::Log(format!(
+            "[anvil] dump server: JNA 5.14.0 on boot classpath \
+             (older JNA aborts the JVM on this macOS)"
+        )));
+    }
+    let mut child = match cmd
         .arg("-jar")
         .arg(server_launcher)
         .arg("nogui")
@@ -1140,6 +1494,10 @@ pub async fn registry_dump_pass(
     // still degrades to `Ok(None)` on overshoot (best-effort, never a gate).
     // The test-injected shortened timeouts go straight to `drive_dump_server`
     // and are untouched.
+    // macOS-only: the boot-classpath JNA shim (no-op / None elsewhere). One
+    // cached download; never blocks the pass if it fails.
+    let jna_boot = macos_jna_boot_jar(&client).await;
+
     drive_dump_server(
         &dump,
         &java,
@@ -1147,6 +1505,7 @@ pub async fn registry_dump_pass(
         std::time::Duration::from_secs(8),
         std::time::Duration::from_secs(300),
         wait_for_jvm,
+        jna_boot,
         &tx,
     )
     .await
@@ -2190,6 +2549,36 @@ async fn ensure_modern_jna_macos(
     Ok(())
 }
 
+/// The `-jar` registry-dump server cannot use `ensure_modern_jna_macos`
+/// (that mutates a constructed classpath; the Mojang bundler self-manages
+/// its own). Return a cached jna-5.14.0 jar for `-Xbootclasspath/a:`
+/// instead — the bootstrap loader wins over the bundler's URLClassLoader,
+/// so 5.14.0 shadows the aborting 5.12.1. Cached under the shared MC dir
+/// (downloaded once, reused by every verify AND the client path). macOS
+/// only; `None` elsewhere or if the one-time download fails (the dump then
+/// keeps its prior best-effort behaviour — fix 4 keeps that honest, not a
+/// fabricated culprit).
+#[cfg(target_os = "macos")]
+async fn macos_jna_boot_jar(client: &reqwest::Client) -> Option<std::path::PathBuf> {
+    const TARGET: &str = "5.14.0";
+    let dest = shared_mc_dir()
+        .join("libraries/net/java/dev/jna/jna")
+        .join(TARGET)
+        .join(format!("jna-{TARGET}.jar"));
+    let url = format!(
+        "https://repo1.maven.org/maven2/net/java/dev/jna/jna/{TARGET}/jna-{TARGET}.jar"
+    );
+    download_if_missing(client, &url, &dest).await.ok()?;
+    Some(dest)
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn macos_jna_boot_jar(
+    _client: &reqwest::Client,
+) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// `group:artifact:version[:classifier]` ->
 /// `group/with/slashes/artifact/version/artifact-version[-classifier].jar`.
 fn maven_coord_to_path(coord: &str) -> Option<String> {
@@ -2570,6 +2959,18 @@ fn build_command_args(
     args.push("-Djna.debug_load=true".into());
     args.push("-Djna.debug_load.jna=true".into());
 
+    // Opt-in per-instance log4j2 override: if the user (or a debug session)
+    // dropped a `log4j2.xml` at `<instance>/config/log4j2.xml`, point the JVM
+    // at it so we can raise specific loggers (e.g. `earth.terrarium`) to
+    // DEBUG without rebuilding the bundled MC config. Absent file → no-op.
+    let log4j_cfg = instance_dir(&instance.id).join("config").join("log4j2.xml");
+    if log4j_cfg.is_file() {
+        args.push(format!(
+            "-Dlog4j.configurationFile={}",
+            log4j_cfg.display()
+        ));
+    }
+
     args.push(p.main_class.clone());
 
     // Game args: modern `arguments.game` or legacy `minecraftArguments`.
@@ -2683,7 +3084,7 @@ mod tests {
 
 #[cfg(test)]
 mod smoke_tests {
-    use super::{classify_smoke_line, parse_fabric_remediation, SmokeSignal};
+    use super::{classify_smoke_line, classify_world_join_line, parse_fabric_remediation, SmokeSignal, WorldJoinSignal};
 
     #[test]
     fn detects_the_exact_failures_seen_this_session() {
@@ -2782,6 +3183,94 @@ mod smoke_tests {
                 "must classify as Failure: {fatal:?}"
             );
         }
+    }
+
+    // ---- world_join_probe classifier — IPN regression + benign probes ----
+    //
+    // Verbatim from the UCL: Bentham Ultimatum crash report
+    // (crash-2026-05-21_00.05.20-client.txt) — the EXACT line shapes the
+    // probe must catch. smoke_test sees none of these because they only
+    // appear AFTER the main-menu success milestone (sound engine started)
+    // when the player attempts world creation.
+    #[test]
+    fn ipn_kotlin_reflection_world_join_crash_is_a_failure() {
+        let real = "kotlin.reflect.jvm.internal.KotlinReflectionInternalError: \
+                    Property 'none' (JVM signature: getNone()Lkotlin/jvm/functions/Function0;) \
+                    not resolved in file class \
+                    org.anti_ad.mc.ipnext.item.rule.natives.DefinedNativeRulesKt";
+        match classify_world_join_line(real) {
+            WorldJoinSignal::Failure { reason, .. } => {
+                assert!(reason.contains("Kotlin reflection"),
+                    "reason must surface the actual cause; got `{reason}`");
+            }
+            other => panic!("IPN kotlin-reflection error must be Failure; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_join_world_throwing_classifies_as_failure() {
+        // From the same crash report — the actual stack-frame line that
+        // names IPN's broken `onJoinWorld` hook.
+        let frame = "at knot//org.anti_ad.mc.ipnext.event.ClientEventHandler.onJoinWorld(Unknown Source)";
+        // The frame alone isn't fatal (it appears in the stack); but the
+        // dispatcher line WITH `Exception` IS — `Exception/Error` words
+        // co-occurring with onJoinWorld is the actual failure marker.
+        let with_error = format!("Caused by: java.lang.NullPointerException at {frame}");
+        assert!(matches!(
+            classify_world_join_line(&with_error),
+            WorldJoinSignal::Failure { .. }
+        ), "Exception-bearing onJoinWorld line must be Failure: `{with_error}`");
+    }
+
+    #[test]
+    fn world_loaded_milestone_is_success_not_a_crash() {
+        // Vanilla 1.20.1 integrated server prints these AFTER spawn-prep.
+        for ok in [
+            "[Server thread/INFO]: Preparing spawn area: 100%",
+            "[Server thread/INFO]: Time elapsed: 4321 ms",
+            "[Server thread/INFO]: Loaded the worlds",
+        ] {
+            assert_eq!(
+                classify_world_join_line(ok),
+                WorldJoinSignal::Success,
+                "world-load milestone must be Success: `{ok}`"
+            );
+        }
+    }
+
+    #[test]
+    fn quick_play_missing_world_is_a_probe_wiring_gap_not_a_mod_crash() {
+        // The exact dialog text from screenshot 2026-05-21_00:33 when the
+        // probe ran `--quickPlaySingleplayer anvil_world_probe` against an
+        // instance without any save by that name. MUST surface as Failure
+        // with a probe-wiring-gap reason so the caller can route around
+        // it (vs. silently waiting out 300s of nothing).
+        for line in [
+            "Failed to Quick Play",
+            "Could not find world with the provided identifier",
+            "[Render thread/ERROR]: Failed to Quick Play: Could not find world with the provided identifier",
+        ] {
+            match classify_world_join_line(line) {
+                WorldJoinSignal::Failure { reason, .. } => {
+                    assert!(reason.contains("Probe wiring gap"),
+                        "must label this as a probe gap, not a mod crash; got `{reason}`");
+                }
+                other => panic!("`{line}` must classify as Failure (probe gap); got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn benign_world_join_lines_do_not_classify_as_failure() {
+        // The Resource-manager-reload line is the WHOLE 80-mod mention
+        // from the user's crash log — must not match anything in the
+        // failure section (no `Exception`, no kotlin reflection).
+        let benign = "[Render thread/INFO]: Reloading ResourceManager: \
+                      vanilla, fabric (apoli, appleskin, azurelib, ...)";
+        assert_eq!(classify_world_join_line(benign), WorldJoinSignal::None);
+        // The bare frame line (no `Exception` / `Error`) is just stack — None.
+        let bare_frame = "at knot//org.anti_ad.mc.ipnext.event.ClientEventHandler.onJoinWorld(Unknown Source)";
+        assert_eq!(classify_world_join_line(bare_frame), WorldJoinSignal::None);
     }
 
     #[test]
@@ -3140,6 +3629,7 @@ exit 0
             std::time::Duration::from_millis(50), // grace
             std::time::Duration::from_secs(10),   // test-shortened timeout
             false,                                // try_lock (serialized tests)
+            None,
             &tx,
         )
         .await
@@ -3217,6 +3707,7 @@ exit 0
             std::time::Duration::from_millis(50), // grace
             std::time::Duration::from_secs(10),   // test-shortened timeout
             false,                                // try_lock (serialized tests)
+            None,
             &tx,
         )
         .await
@@ -3282,6 +3773,7 @@ exit 0
             std::time::Duration::from_millis(50),
             std::time::Duration::from_millis(800), // short timeout
             false,
+            None,
             &tx,
         )
         .await

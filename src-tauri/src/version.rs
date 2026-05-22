@@ -95,6 +95,81 @@ impl PartialEq for Version {
 }
 impl Eq for Version {}
 
+/// Strip the Minecraft-version and loader noise some mods glue onto their
+/// Modrinth `version_number` so the REAL mod version is what gets compared:
+/// `mc1.20.1-0.5.13-fabric` -> `0.5.13`, `1.20-2.16.32-fabric` -> `2.16.32`.
+///
+/// Conservative by construction so it never corrupts a real version:
+///  - a leading `mc`/`MC` is removed only when immediately followed by a digit;
+///  - a leading Minecraft-style `1.<n>[.<n>]` group is removed only when
+///    followed by `-`/`_` AND then a digit (so `1.20.5` with no dash, or
+///    `1.20-rc1` whose char after `-` is non-digit, are left intact);
+///  - one trailing loader tag (`-fabric`/`-forge`/`-quilt`/`-neoforge`).
+/// `+build` metadata is left for `parse` to handle via its `+` split.
+fn strip_mc_loader_noise(s: &str) -> &str {
+    let mut s = s;
+    // Leading loader tag form: `fabric_1.20-2.13.82`, `forge_1.20.1-1.2.3`.
+    for pre in ["fabric_", "forge_", "quilt_", "neoforge_"] {
+        if let Some(rest) = s.strip_prefix(pre) {
+            if rest.starts_with(|c: char| c.is_ascii_digit()) {
+                s = rest;
+                break;
+            }
+        }
+    }
+    if let Some(rest) = s.strip_prefix("mc").or_else(|| s.strip_prefix("MC")) {
+        if rest.starts_with(|c: char| c.is_ascii_digit()) {
+            s = rest;
+        }
+    }
+    s = strip_leading_mc_group(s);
+    for suf in ["-fabric", "-forge", "-quilt", "-neoforge"] {
+        if let Some(head) = s.strip_suffix(suf) {
+            s = head;
+            break;
+        }
+    }
+    s
+}
+
+/// Remove a leading `1.<minor>[.<patch>]` Minecraft-version group iff it is
+/// followed by `-`/`_` and then a digit (the gluing pattern). Returns `s`
+/// unchanged otherwise. Minecraft releases are all `1.x`, so anchoring on
+/// `1.` keeps a mod whose own version starts `2.x`/`0.x` safe, and the
+/// require-a-digit-after-separator rule protects real `1.x` mod versions
+/// (`1.20.5`, `1.4.41`, `1.20-rc1`).
+fn strip_leading_mc_group(s: &str) -> &str {
+    let b = s.as_bytes();
+    if !s.starts_with("1.") {
+        return s;
+    }
+    let mut i = 2; // past "1."
+    let minor_start = i;
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == minor_start {
+        return s; // "1." with no minor digits
+    }
+    if i < b.len() && b[i] == b'.' {
+        let patch_start = i + 1;
+        let mut k = patch_start;
+        while k < b.len() && b[k].is_ascii_digit() {
+            k += 1;
+        }
+        if k > patch_start {
+            i = k;
+        }
+    }
+    if i + 1 < b.len()
+        && (b[i] == b'-' || b[i] == b'_')
+        && b[i + 1].is_ascii_digit()
+    {
+        return &s[i + 1..];
+    }
+    s
+}
+
 impl Version {
     /// Parse a single concrete version string. Tolerates a leading `=`,
     /// surrounding whitespace, and an optional `v` prefix. Returns `None` only
@@ -124,6 +199,13 @@ impl Version {
             Some(rest) if rest.starts_with(|c: char| c.is_ascii_digit()) => rest,
             _ => s,
         };
+        // Strip Minecraft-version + loader noise some mods glue onto their
+        // Modrinth version_number so the REAL version is compared (Sodium's
+        // `mc1.20.1-0.5.13-fabric` -> `0.5.13`). Without this the leading `mc1`
+        // segment compares greater than any number and poisons the upper bound
+        // (e.g. `<0.6` wrongly rejected `mc1.20.1-0.5.13`, so a range repin
+        // found "no version" and the curator deleted content instead).
+        let s = strip_mc_loader_noise(s);
         if s.is_empty() {
             return None;
         }
@@ -727,6 +809,34 @@ mod tests {
         assert!(v("1.0.0") < v("1.0.0+1"));
         assert!(v("1.9.2+kotlin.1.8.10") < v("1.13.11+kotlin.2.3.21"));
         assert!(v("1.10.20+kotlin.1.9.24") < v("1.10.20+kotlin.2.0.0"));
+    }
+
+    /// MC-prefixed Modrinth version_numbers must compare by the REAL mod
+    /// version (the Harvest Valley defect: Sodium's `mc1.20.1-0.5.13-fabric`
+    /// was rejected by `<0.6`, so a range repin found "no version" and content
+    /// got deleted instead).
+    #[test]
+    fn mc_prefixed_versions_compare_by_real_version() {
+        // Sodium `mc...` prefix — the proven failure case.
+        assert!(sat("mc1.20.1-0.5.13-fabric", ">=0.5.11 <0.6"));
+        assert!(sat("mc1.20.1-0.5.11", ">=0.5.11 <0.6"));
+        assert!(sat("mc1.20.1-0.5.13-fabric", ">=0.5.11"));
+        assert!(!sat("0.4.10+build.27", ">=0.5.11"));
+        // Moonlight `1.20-` prefix (already worked; must still be correct).
+        assert!(sat("1.20-2.16.32-fabric", ">=1.20-2.16.26"));
+        assert!(!sat("1.20-2.13.82-fabric", ">=1.20-2.16.26"));
+        // Normalised strings equal their clean form.
+        assert_eq!(v("mc1.20.1-0.5.13-fabric"), v("0.5.13"));
+        assert_eq!(v("1.20-2.16.32-fabric"), v("2.16.32"));
+        // Leading loader-tag form (real Moonlight 2.13.82 = `fabric_1.20-...`).
+        assert_eq!(v("fabric_1.20-2.13.82"), v("2.13.82"));
+        assert!(v("fabric_1.20-2.13.82") < v("1.20-2.16.32-fabric"));
+        // No over-strip: a real `1.x` mod version (no `-<digit>`) is preserved.
+        assert_eq!(v("1.4.41"), v("1.4.41"));
+        assert!(v("1.4.41") > v("1.4.40"));
+        assert!(v("1.4.41") != v("41"));
+        assert!(v("1.20.5") != v("5")); // 1.20.5 has no dash -> not stripped
+        assert!(v("1.20.5") > v("1.20.4"));
     }
 
     // ---- comparison order (the canonical rule) -------------------------

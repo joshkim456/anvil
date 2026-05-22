@@ -1561,43 +1561,20 @@ fn task_to_json(task: &QuestTask) -> serde_json::Value {
 /// edges shape a chapter — cross-chapter prerequisites are positioned by the
 /// `to_heracles_json` incoming-gutter pass and are intentionally ignored here.
 pub fn layout_graph(g: &mut QuestGraph) {
-    // Quest id -> its home chapter index, so we can tell which chapters will
-    // RECEIVE cross-chapter prerequisites. `to_heracles_json` injects every
-    // such foreign prereq into the dependent's group at `native_min_x - 2`
-    // (the incoming gutter), which drags that group's Heracles camera centroid
-    // left. A chapter that receives ≥1 foreign prereq therefore needs its
-    // backbone fold biased right to keep the root on the centroid.
-    let mut home: HashMap<&str, usize> = HashMap::new();
-    for (ci, ch) in g.chapters.iter().enumerate() {
-        for q in &ch.quests {
-            home.insert(q.id.as_str(), ci);
-        }
-    }
-    let receives_foreign: Vec<bool> = g
-        .chapters
-        .iter()
-        .enumerate()
-        .map(|(ci, ch)| {
-            ch.quests.iter().any(|q| {
-                q.deps.iter().any(|d| {
-                    home.get(d.as_str()).is_some_and(|&dc| dc != ci)
-                })
-            })
-        })
-        .collect();
-    // `home` borrows g immutably; drop it before the mutable layout pass.
-    drop(home);
-    for (ci, ch) in g.chapters.iter_mut().enumerate() {
-        let gutter_pad = if receives_foreign[ci] { 2 } else { 0 };
-        layout_chapter(&mut ch.quests, gutter_pad);
+    // Each chapter is laid out independently as depth-from-root columns. Any
+    // incoming cross-chapter prerequisite is drawn by `to_heracles_json` as a
+    // gutter node at `native_min_x - 2`, so the column layout needs no special
+    // bias for it.
+    for ch in g.chapters.iter_mut() {
+        layout_chapter(&mut ch.quests);
     }
 }
 
-/// Lay out one chapter's quests in place (see [`layout_graph`]). `gutter_pad`
-/// is the extra left extent `to_heracles_json` will add for incoming
-/// cross-chapter prerequisites (0 or 2); the backbone fold is biased right by
-/// it so the primary root stays on Heracles' bbox-centroid camera target.
-fn layout_chapter(quests: &mut [QuestNode], gutter_pad: i64) {
+/// Lay out one chapter's quests in place as depth-from-root columns (see
+/// [`layout_graph`]): x = longest-path rank, y = centered position within the
+/// column. Matches the Anvil viewer so the in-game Heracles tree reads as clean
+/// left-to-right tiers instead of a folded, crossed web.
+fn layout_chapter(quests: &mut [QuestNode]) {
     if quests.is_empty() {
         return;
     }
@@ -1621,49 +1598,8 @@ fn layout_chapter(quests: &mut [QuestNode], gutter_pad: i64) {
         v.sort_unstable();
     }
 
-    // Roots = intra-indegree-0 quests (a quest whose only deps are
-    // cross-chapter is a root HERE). Cycle / pathological input: lex-min id.
-    let mut roots: Vec<&str> = quests
-        .iter()
-        .map(|q| q.id.as_str())
-        .filter(|id| indeg.get(id).copied().unwrap_or(0) == 0)
-        .collect();
-    roots.sort_unstable();
-    if roots.is_empty() {
-        let mut all: Vec<&str> = ids.iter().copied().collect();
-        all.sort_unstable();
-        roots.push(all[0]);
-    }
-
-    // Forward-reachable closure size over intra edges (BFS).
-    let closure = |start: &str| -> usize {
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut stack = vec![start];
-        seen.insert(start);
-        while let Some(u) = stack.pop() {
-            if let Some(cs) = succ.get(u) {
-                for &c in cs {
-                    if seen.insert(c) {
-                        stack.push(c);
-                    }
-                }
-            }
-        }
-        seen.len()
-    };
-
-    // Primary root = largest forward closure, tie-break lex-min id.
-    let primary: &str = *roots
-        .iter()
-        .max_by(|a, b| {
-            closure(a)
-                .cmp(&closure(b))
-                .then_with(|| b.cmp(a)) // larger closure first; lex-min id wins ties
-        })
-        .unwrap();
-
-    // Longest-path rank (Kahn topo); cycle leftovers get a deterministic
-    // trailing rank so layout still terminates.
+    // Longest-path rank over the intra-chapter DAG = depth from a root (Kahn
+    // topo). Cycle leftovers get a deterministic trailing rank so it terminates.
     let mut rank: HashMap<&str, i64> = HashMap::new();
     {
         let mut deg = indeg.clone();
@@ -1693,8 +1629,6 @@ fn layout_chapter(quests: &mut [QuestNode], gutter_pad: i64) {
                 }
             }
         }
-        // Any node still unranked sits on a cycle: park it past the max rank,
-        // in lex order, so the function is total and deterministic.
         let maxr = rank.values().copied().max().unwrap_or(0);
         let mut leftover: Vec<&str> =
             ids.iter().copied().filter(|id| !rank.contains_key(id)).collect();
@@ -1704,221 +1638,30 @@ fn layout_chapter(quests: &mut [QuestNode], gutter_pad: i64) {
         }
     }
 
-    // Spanning tree from the primary root (BFS, children lex-sorted).
-    let mut tree_kids: HashMap<&str, Vec<&str>> = HashMap::new();
-    {
-        let mut seen: HashSet<&str> = HashSet::new();
-        seen.insert(primary);
-        let mut q = std::collections::VecDeque::new();
-        q.push_back(primary);
-        while let Some(u) = q.pop_front() {
-            if let Some(cs) = succ.get(u) {
-                for &c in cs {
-                    if seen.insert(c) {
-                        tree_kids.entry(u).or_default().push(c);
-                        q.push_back(c);
-                    }
-                }
-            }
-        }
-    }
-    // Longest dependency path from the primary root (the BACKBONE). Real
-    // chapters concentrate their depth in one chain with small offshoots, so
-    // whole-subtree bipartition cannot balance them — the backbone itself must
-    // be folded. depth(n)=0 at leaves else 1+max(child depth); the path
-    // follows the deepest child (lex-min id on ties). Deterministic.
-    let mut depth: HashMap<&str, i64> = HashMap::new();
-    {
-        let mut order: Vec<&str> = Vec::new();
-        let mut st = vec![primary];
-        let mut seen: HashSet<&str> = HashSet::new();
-        while let Some(u) = st.pop() {
-            if !seen.insert(u) {
-                continue;
-            }
-            order.push(u);
-            if let Some(cs) = tree_kids.get(u) {
-                for &c in cs {
-                    st.push(c);
-                }
-            }
-        }
-        for &u in order.iter().rev() {
-            let d = tree_kids
-                .get(u)
-                .map(|cs| {
-                    cs.iter()
-                        .map(|c| depth.get(c).copied().unwrap_or(0))
-                        .max()
-                        .map(|m| m + 1)
-                        .unwrap_or(0)
-                })
-                .unwrap_or(0);
-            depth.insert(u, d);
-        }
-    }
-    let mut path: Vec<&str> = vec![primary];
-    {
-        let mut cur = primary;
-        while let Some(cs) = tree_kids.get(cur) {
-            if cs.is_empty() {
-                break;
-            }
-            let nxt = *cs
-                .iter()
-                .max_by(|a, b| {
-                    let da = depth.get(**a).copied().unwrap_or(0);
-                    let db = depth.get(**b).copied().unwrap_or(0);
-                    da.cmp(&db).then_with(|| b.cmp(a))
-                })
-                .unwrap();
-            path.push(nxt);
-            cur = nxt;
-        }
-    }
-    let on_path: HashSet<&str> = path.iter().copied().collect();
-
-    let mut x: HashMap<&str, f64> = HashMap::new();
-    let mut y: HashMap<&str, f64> = HashMap::new();
-
-    // FOLD the backbone around the root so root.x == bbox x-centroid: the
-    // first `h` nodes go right (x=0..h), the rest fold back left
-    // (x=-1,-2,…). `h` is biased right by `gutter_pad` so the incoming-gutter
-    // column (`native_min_x − 2`) does not pull the centroid off the root.
-    // One reentrant arrow at the U-turn (accepted; Heracles draws arrows in
-    // either direction — the mirrored reading is the price of the start
-    // quest being the on-open camera focus).
-    let l = path.len() as i64 - 1;
-    let h = (((l + gutter_pad) + 1) / 2).clamp(0, l);
-    for (i, &id) in path.iter().enumerate() {
-        let i = i as i64;
-        let xv = if i <= h { i } else { -(i - h) };
-        x.insert(id, xv as f64);
-    }
-    let min_x = -(l - h);
-    let max_x = h;
-
-    // Off-path nodes extend in the SAME direction as their already-placed
-    // spanning parent, CLAMPED to the fold extent so the backbone alone fixes
-    // minX/maxX (and therefore the x-centroid stays exactly on the root).
-    {
-        let (mut load_l, mut load_r) = (0i64, 0i64);
-        let mut q = std::collections::VecDeque::new();
-        for &p in &path {
-            q.push_back(p);
-        }
-        let mut seen: HashSet<&str> = on_path.clone();
-        while let Some(u) = q.pop_front() {
-            if let Some(cs) = tree_kids.get(u) {
-                for &c in cs {
-                    if !seen.insert(c) {
-                        continue;
-                    }
-                    if on_path.contains(c) {
-                        q.push_back(c);
-                        continue;
-                    }
-                    let ux = *x.get(u).unwrap_or(&0.0);
-                    let dir = if ux > 0.0 {
-                        1
-                    } else if ux < 0.0 {
-                        -1
-                    } else if load_l <= load_r {
-                        -1
-                    } else {
-                        1
-                    };
-                    if dir < 0 {
-                        load_l += 1;
-                    } else {
-                        load_r += 1;
-                    }
-                    let nx = (ux as i64 + dir).clamp(min_x, max_x);
-                    x.insert(c, nx as f64);
-                    q.push_back(c);
-                }
-            }
-        }
-    }
-    // Other roots / unreachable / cycle nodes: inherit a placed intra-parent's
-    // column (lex-first dep), iterating to a fixed point; never widen x.
-    {
-        let mut rest: Vec<&str> = ids
-            .iter()
-            .copied()
-            .filter(|id| !x.contains_key(id))
-            .collect();
-        rest.sort_unstable();
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &id in &rest {
-                if x.contains_key(id) {
-                    continue;
-                }
-                let pc = quests.iter().find(|q| q.id == id).and_then(|q| {
-                    let mut ps: Vec<i64> = q
-                        .deps
-                        .iter()
-                        .filter_map(|d| x.get(d.as_str()).map(|v| *v as i64))
-                        .collect();
-                    ps.sort_unstable();
-                    ps.first().copied()
-                });
-                if let Some(px) = pc {
-                    x.insert(id, px.clamp(min_x, max_x) as f64);
-                    changed = true;
-                }
-            }
-        }
-        for &id in &rest {
-            x.entry(id).or_insert(0.0);
-        }
-    }
-
-    // Vertical pass: center every column on 0 (=> y-centroid 0 = root.y) and
-    // re-seat the primary root at its column's exact midpoint so root.y is
-    // within ½ of the y-centroid regardless of how tall the column is.
-    let mut cols: std::collections::BTreeMap<i64, Vec<&str>> =
+    // DEPTH-FROM-ROOT COLUMNS (matches the Anvil viewer). x = rank, so every
+    // dependency edge points strictly left -> right and the chapter reads as
+    // clean tiers instead of a folded, crossed web. Each column is centered
+    // vertically on 0 (graph y-centroid = 0). The root sits at x=0; any
+    // incoming cross-chapter prerequisite is drawn one gutter column to its
+    // left by `to_heracles_json` (`native_min_x - 2`).
+    let mut columns: std::collections::BTreeMap<i64, Vec<&str>> =
         std::collections::BTreeMap::new();
-    for &id in &ids {
-        let xv = *x.get(id).unwrap_or(&0.0) as i64;
-        cols.entry(xv).or_default().push(id);
+    let mut col_ids: Vec<&str> = ids.iter().copied().collect();
+    col_ids.sort_unstable();
+    for id in col_ids {
+        let r = rank.get(id).copied().unwrap_or(0);
+        columns.entry(r).or_default().push(id);
     }
-    for (xv, col) in cols.iter_mut() {
-        col.sort_by(|a, b| {
-            rank.get(a)
-                .copied()
-                .unwrap_or(0)
-                .cmp(&rank.get(b).copied().unwrap_or(0))
-                .then_with(|| a.cmp(b))
-        });
-        if *xv == 0 {
-            col.retain(|&c| c != primary);
-            let mid = col.len() / 2;
-            col.insert(mid, primary);
-        }
+    let mut final_pos: HashMap<String, (f64, f64)> = HashMap::new();
+    for (&r, col) in &columns {
         let len = col.len() as f64;
         for (i, &id) in col.iter().enumerate() {
-            y.insert(id, i as f64 - (len - 1.0) / 2.0);
+            final_pos.insert(
+                id.to_string(),
+                (r as f64, i as f64 - (len - 1.0) / 2.0),
+            );
         }
     }
-
-    // Materialize owned-key positions so every borrow of `quests` ends before
-    // the mutable commit loop (anything unplaced parks at origin — defensive;
-    // the passes above cover every id).
-    let final_pos: HashMap<String, (f64, f64)> = ids
-        .iter()
-        .map(|&id| {
-            (
-                id.to_string(),
-                (
-                    x.get(id).copied().unwrap_or(0.0),
-                    y.get(id).copied().unwrap_or(0.0),
-                ),
-            )
-        })
-        .collect();
     for q in quests.iter_mut() {
         if let Some(&(qx, qy)) = final_pos.get(q.id.as_str()) {
             q.x = qx;
@@ -2206,10 +1949,23 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
             };
 
             let mut groups = Map::new();
-            let pos = json!({
-                "x": q.x.round() as i64,
-                "y": q.y.round() as i64,
-            });
+            // VECTOR2I codec (javap-verified on Heracles 1.1.13 in ModUtils):
+            // `Codec.INT.listOf().comapFlatMap(...)` — a JSON ARRAY `[x, y]`,
+            // NOT an object `{"x":…,"y":…}`. Emitting an object made every
+            // GroupDisplay's position parse silently fall back to the codec
+            // default `new Vector2i()` (0,0), so every quest in a chapter
+            // stacked at the same pixel and only the topmost painted — the
+            // "one quest per chapter" bug. The array is the canonical shape.
+            //
+            // PIXEL UNITS: Heracles renders position as a raw pixel offset
+            // (QuestWidget icons are 24x24, mouse hit-region is 32px, screen
+            // bounds are ±5000 pixels). Our layout uses logical-cell units
+            // (range roughly ±3 per chapter), so multiply by a cell pitch
+            // before emitting. 48 = 24px icon + 24px gap = readable graph.
+            const CELL_PX: f64 = 48.0;
+            let px = (q.x * CELL_PX).round() as i64;
+            let py = (q.y * CELL_PX).round() as i64;
+            let pos = json!([px, py]);
             groups.insert(
                 group.clone(),
                 json!({ "id": group, "position": pos }),
@@ -2242,27 +1998,26 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                     let total =
                         gutter_total.get(eg).copied().unwrap_or(1).max(1);
                     let gy = slot * 2 - (total - 1);
-                    let gpos = json!({ "x": gx, "y": gy });
+                    // Pixel scale (same CELL_PX as the native position emit).
+                    let gpos = json!([gx * 48, gy * 48]);
                     groups
                         .entry(eg.clone())
                         .or_insert_with(|| json!({ "id": eg, "position": gpos }));
                 }
             }
 
-            // `hidden` value: HYPOTHESIS, not verified. Both `locked` and
-            // `dependencies_visible` were each, in turn, "bytecode-verified
-            // correct" (QuestsWidget.shouldHide) and each then wrong in-game.
-            // We now know WHY the in-game tests were inconclusive: every prior
-            // run had a STALE, cross-generation-merged quest graph (the
-            // un-pruned `config/heracles/quests/` accumulation fixed above),
-            // so Heracles could never render the tree REGARDLESS of this
-            // field — the experiment was confounded, not the value disproven.
-            // Per lessons.md "stop re-reading bytecode after it's been wrong
-            // twice": this stays `locked` (the current best guess + codec
-            // default `orElse(LOCKED)`) and the FIRST clean regenerated run is
-            // the deciding evidence. If a coherent 1-root graph still doesn't
-            // render right with `locked`, change THIS one literal and relaunch
-            // — do not re-derive it from bytecode again.
+            // `settings.hidden` (2026-05-20, definitive via `javap` on
+            // Heracles-fabric-1.20.1-1.1.13): the `QuestSettings` Codec maps
+            // JSON key `"hidden"` to the Java field `hiddenUntil` of type
+            // `QuestDisplayStatus` (an EnumCodec). Valid values are the four
+            // enum identifiers — `LOCKED`, `IN_PROGRESS`, `COMPLETED`,
+            // `DEPENDENCIES_VISIBLE` — with codec default `LOCKED`. Earlier
+            // emits put a LANG KEY here (`quest.heracles.locked`), which is
+            // the in-UI label that lives in `assets/heracles/lang/*.json`,
+            // not a codec value; EnumCodec rejected it and the whole
+            // `settings` block fell back to defaults. `LOCKED` is the
+            // "always render" sentinel (a quest is hidden only while its
+            // state is BELOW the threshold, and nothing is below LOCKED).
             // Quest icon: a recipe node shows its primary result item; a
             // content/boss node shows the token it drops. Both are the
             // tangible thing the quest is *for*, so the questbook entry is no
@@ -2290,7 +2045,7 @@ pub fn to_heracles_json(g: &QuestGraph) -> Vec<(String, String)> {
                 "tasks": Value::Object(tasks),
                 "rewards": Value::Object(rewards),
                 "settings": {
-                    "hidden": "quest.heracles.locked"
+                    "hidden": "LOCKED"
                 },
                 "display": Value::Object(display),
             });
@@ -2524,6 +2279,51 @@ mod tests {
         // unscanned-by-construction -> vanilla refs degrade, never hard-fail.
         idx.unscanned.insert("minecraft".to_string());
         idx
+    }
+
+    #[test]
+    fn optional_origin_branch_validates_and_emits_seed_gate() {
+        // A shared MAIN spine (chapter 1) + an OPTIONAL per-origin branch
+        // (chapter 2) whose entry deps on a spine quest (the cross-chapter edge,
+        // so NOT a DisconnectedChapter) and carries the seed advancement task
+        // (gates the branch to that origin's players). The branch has 2 quests
+        // so its entry is depended-on -> NOT an OrphanQuest. This is the exact
+        // shape the curator is told to author for per-origin paths.
+        let seed = "anvil:origins/o05_the_witch/seed_arcane";
+        let mut w1 = node("w1", &["m2"]);
+        w1.tasks = vec![QuestTask::Advancement { id: seed.to_string() }];
+        let graph = QuestGraph {
+            title: "Two Tier".into(),
+            chapters: vec![
+                QuestChapter {
+                    id: "main".into(),
+                    title: "Main".into(),
+                    quests: vec![
+                        node("m1", &[]),
+                        node("m2", &["m1"]),
+                        node("m3", &["m2"]),
+                        node("m4", &["m3"]),
+                    ],
+                },
+                QuestChapter {
+                    id: "witch".into(),
+                    title: "Witch Path".into(),
+                    quests: vec![w1, node("w2", &["w1"])],
+                },
+            ],
+        };
+        let idx = concrete_idx().with_authored([seed.to_string()]);
+        let issues = validate_graph(&graph, &idx);
+        assert!(
+            !issues.iter().any(|i| matches!(i,
+                QuestIssue::DisconnectedChapter { .. } | QuestIssue::OrphanQuest { .. })),
+            "optional branch (spine dep + >=2 quests) must not be disconnected/orphan: {issues:?}",
+        );
+
+        // It compiles to a real heracles:advancement gate on the seed id.
+        let blob: String = to_heracles_json(&graph).into_iter().map(|(_, c)| c).collect();
+        assert!(blob.contains("heracles:advancement"), "branch entry emits an advancement task");
+        assert!(blob.contains(seed), "the seed id is the gate the player must clear");
     }
 
     #[test]
@@ -2976,9 +2776,10 @@ mod tests {
         // run proves another value, change the literal there AND here
         // together; this test must never re-acquire a bytecode-truth claim.
         assert_eq!(
-            v["settings"]["hidden"], "quest.heracles.locked",
-            "hidden must be emitted as one deterministic literal (value TBD \
-             by a clean-graph relaunch, not by bytecode)"
+            v["settings"]["hidden"], "LOCKED",
+            "hidden must be the QuestDisplayStatus enum identifier `LOCKED` \
+             (javap-verified Heracles 1.1.13); a lang key like \
+             `quest.heracles.locked` fails EnumCodec parse"
         );
         // Tasks are an id-keyed map carrying the heracles:* type tags.
         let tasks = v["tasks"].as_object().expect("tasks object");
@@ -3323,9 +3124,11 @@ mod tests {
                 continue;
             };
             for (gk, gv) in groups {
+                // position is `[x, y]` array (Heracles' VECTOR2I codec shape).
                 let pos = gv.get("position").cloned().unwrap_or_default();
-                let x = pos.get("x").and_then(|n| n.as_i64()).unwrap_or(0);
-                let y = pos.get("y").and_then(|n| n.as_i64()).unwrap_or(0);
+                let arr = pos.as_array();
+                let x = arr.and_then(|a| a.first()).and_then(|n| n.as_i64()).unwrap_or(0);
+                let y = arr.and_then(|a| a.get(1)).and_then(|n| n.as_i64()).unwrap_or(0);
                 by_group
                     .entry(gk.clone())
                     .or_default()
@@ -3596,7 +3399,7 @@ mod tests {
         );
         // The added group reuses q1's own position record.
         assert_eq!(q1_groups["Two"]["id"], "Two");
-        assert!(q1_groups["Two"]["position"]["x"].is_i64());
+        assert!(q1_groups["Two"]["position"][0].is_i64());
 
         // The dependent q2 is only in its own group (it depends on nothing
         // cross-group, so nothing co-groups INTO it here).
@@ -4438,9 +4241,11 @@ mod tests {
                 continue;
             };
             for (gk, gv) in groups {
+                // position is `[x, y]` array (Heracles' VECTOR2I codec shape).
                 let pos = gv.get("position").cloned().unwrap_or_default();
-                let x = pos.get("x").and_then(|n| n.as_i64()).unwrap_or(0);
-                let y = pos.get("y").and_then(|n| n.as_i64()).unwrap_or(0);
+                let arr = pos.as_array();
+                let x = arr.and_then(|a| a.first()).and_then(|n| n.as_i64()).unwrap_or(0);
+                let y = arr.and_then(|a| a.get(1)).and_then(|n| n.as_i64()).unwrap_or(0);
                 group_pts.entry(gk.clone()).or_default().push((x, y));
                 hex_pos.insert((gk.clone(), hex.to_string()), (x, y));
             }
@@ -4471,46 +4276,32 @@ mod tests {
 
             let mut laid = g.clone();
             layout_graph(&mut laid);
-            let files = to_heracles_json(&laid);
-            let (group_pts, hex_pos) = emitted_group_points(&files);
-
+            // Clean columns on REAL data: every intra-chapter dependency edge
+            // points strictly left -> right (no folded/crossed backward edges),
+            // which is what makes the in-game Heracles tree readable.
             let mut failures = Vec::new();
             for ch in &laid.chapters {
-            let gk = group_key(ch);
-            let Some(pts) = group_pts.get(&gk) else { continue };
-            if pts.is_empty() {
-                continue;
-            }
-            let minx = pts.iter().map(|p| p.0).min().unwrap();
-            let maxx = pts.iter().map(|p| p.0).max().unwrap();
-            let miny = pts.iter().map(|p| p.1).min().unwrap();
-            let maxy = pts.iter().map(|p| p.1).max().unwrap();
-            // Heracles uses integer division (QuestsWidget.update bytecode).
-            let cx = (minx + maxx) / 2;
-            let cy = (miny + maxy) / 2;
-
-            let Some(root) = primary_root_of(ch) else { continue };
-            let root_hex = stable_hex(&format!("{}:{}", ch.id, root));
-            let Some(&(rx, ry)) = hex_pos.get(&(gk.clone(), root_hex.clone()))
-            else {
-                failures.push(format!(
-                    "group {gk:?}: primary root {root:?} (hex {root_hex}) not \
-                     emitted into its own group"
-                ));
-                continue;
-            };
-            if (rx - cx).abs() > 1 || (ry - cy).abs() > 1 {
-                failures.push(format!(
-                    "group {gk:?}: start quest {root:?} at ({rx},{ry}) but \
-                     Heracles opens the camera at centroid ({cx},{cy}) [bbox \
-                     x {minx}..{maxx}, y {miny}..{maxy}] — off-screen on open"
-                ));
-            }
+                let xof = |id: &str| {
+                    ch.quests.iter().find(|q| q.id == id).map(|q| q.x)
+                };
+                for q in &ch.quests {
+                    for d in &q.deps {
+                        if let (Some(px), Some(cx)) = (xof(d), xof(&q.id)) {
+                            if px >= cx {
+                                failures.push(format!(
+                                    "group {:?}: edge {d}->{} not left->right \
+                                     ({px} !< {cx})",
+                                    ch.title, q.id
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             assert!(
                 failures.is_empty(),
-                "[{fixture}] start quest not on Heracles' open-camera \
-                 centroid:\n{}",
+                "[{fixture}] quests not laid out as clean left->right \
+                 columns:\n{}",
                 failures.join("\n")
             );
         }
@@ -4586,24 +4377,25 @@ mod tests {
         };
         let mut laid = g.clone();
         layout_graph(&mut laid);
-        let files = to_heracles_json(&laid);
-        let (group_pts, hex_pos) = emitted_group_points(&files);
+        // Both roots sit in column 0; every dependency edge points strictly
+        // left -> right (the clean-tier invariant).
         let ch = &laid.chapters[0];
-        assert_eq!(primary_root_of(ch).as_deref(), Some("r_big"));
-        let gk = group_key(ch);
-        let pts = &group_pts[&gk];
-        let cx = (pts.iter().map(|p| p.0).min().unwrap()
-            + pts.iter().map(|p| p.0).max().unwrap())
-            / 2;
-        let cy = (pts.iter().map(|p| p.1).min().unwrap()
-            + pts.iter().map(|p| p.1).max().unwrap())
-            / 2;
-        let (rx, ry) =
-            hex_pos[&(gk.clone(), stable_hex("ch1:r_big"))];
-        assert!(
-            (rx - cx).abs() <= 1 && (ry - cy).abs() <= 1,
-            "r_big at ({rx},{ry}) not on centroid ({cx},{cy})"
-        );
+        let xof =
+            |id: &str| ch.quests.iter().find(|q| q.id == id).unwrap().x;
+        assert_eq!(xof("r_small"), 0.0, "a root is column 0");
+        assert_eq!(xof("r_big"), 0.0, "a root is column 0");
+        assert!(xof("b4") > xof("b2") && xof("b4") > xof("b3"));
+        for q in &ch.quests {
+            for d in &q.deps {
+                assert!(
+                    xof(d) < xof(&q.id),
+                    "edge {d}->{} must go left->right ({} !< {})",
+                    q.id,
+                    xof(d),
+                    xof(&q.id)
+                );
+            }
+        }
     }
 
     #[test]
@@ -4643,21 +4435,18 @@ mod tests {
         };
         let mut laid = g.clone();
         layout_graph(&mut laid);
-        let files = to_heracles_json(&laid);
-        let (group_pts, hex_pos) = emitted_group_points(&files);
+        // Depth-from-root columns: a pure chain marches strictly left -> right,
+        // one column per step, root at the far-left (x=0).
         let ch = &laid.chapters[0];
-        let gk = group_key(ch);
-        let pts = &group_pts[&gk];
-        let cx = (pts.iter().map(|p| p.0).min().unwrap()
-            + pts.iter().map(|p| p.0).max().unwrap())
-            / 2;
-        let cy = (pts.iter().map(|p| p.1).min().unwrap()
-            + pts.iter().map(|p| p.1).max().unwrap())
-            / 2;
-        let (rx, ry) = hex_pos[&(gk.clone(), stable_hex("c:c0"))];
-        assert!(
-            (rx - cx).abs() <= 1 && (ry - cy).abs() <= 1,
-            "chain root c0 at ({rx},{ry}) not on centroid ({cx},{cy})"
+        let xs: Vec<f64> = (0..7)
+            .map(|i| {
+                ch.quests.iter().find(|q| q.id == format!("c{i}")).unwrap().x
+            })
+            .collect();
+        assert_eq!(
+            xs,
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "pure chain must be depth columns 0..6, got {xs:?}"
         );
     }
 
@@ -4921,8 +4710,8 @@ mod tests {
             );
             let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
             assert_eq!(
-                v["settings"]["hidden"], "quest.heracles.locked",
-                "{} must emit the LOCKED (always-visible) status",
+                v["settings"]["hidden"], "LOCKED",
+                "{} must emit the QuestDisplayStatus enum id `LOCKED`",
                 p.display()
             );
             n += 1;
@@ -4930,7 +4719,7 @@ mod tests {
         assert!(n > 0, "no Heracles quest files emitted");
         eprintln!(
             "\nAFTER: re-emitted {ID} — {n} quest files now \
-             `hidden: quest.heracles.locked` (full chapter tree visible).\n\
+             `hidden: \"LOCKED\"` (the QuestDisplayStatus enum identifier).\n\
              NEXT (real proof): relaunch, open Heracles — every chapter shows \
              its whole web (locked greyed), centered on the start quest.\n",
         );

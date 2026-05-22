@@ -294,6 +294,99 @@ pub fn filename_namespace(path: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Class -> mod attribution (deterministic crash culprit, no LLM)
+// ---------------------------------------------------------------------------
+
+/// Owner of a Java class, resolved by scanning the instance's installed mod
+/// jars for the class's package. Lets crash diagnosis turn a bare
+/// `NoClassDefFoundError <class>` (or a runtime stack-frame class) into the MOD
+/// that ships — or should ship — it, with no LLM guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassOwner {
+    /// Fabric mod id of the jar that owns the class's package.
+    pub mod_id: String,
+    /// How many leading package segments matched (deeper = more certain).
+    pub depth: usize,
+}
+
+/// Find which INSTALLED mod jar owns a Java class's package, by matching the
+/// class path against the `.class` entries inside each jar. Returns the jar
+/// with the DEEPEST package-prefix match (the true owner wins over a shallow
+/// shaded/relocated match), or `None` when no installed jar ships that package.
+///
+/// Crash-diagnosis semantics:
+///  - `Some` for a MISSING class (`NoClassDefFoundError`) ⇒ the providing mod
+///    IS installed but at an incompatible version (the class moved/renamed
+///    between versions) ⇒ repin that mod (version skew), do NOT remove others.
+///  - `Some` for a class named in a runtime/mixin stack frame ⇒ that mod is the
+///    one whose code is on the stack ⇒ the culprit.
+///  - `None` ⇒ the library is absent entirely ⇒ add it (or remove the consumer).
+///
+/// Accepts either dotted (`a.b.C`) or slashed (`a/b/C`) class paths. Requires a
+/// ≥2-segment package match so a bare 2-token name can never own everything.
+/// Runs only on the (rare) crash path; per-jar central-directory enumeration is
+/// cheap. Tolerant: an unreadable / non-zip jar is skipped, never fatal.
+pub fn attribute_class_to_mod(
+    inst: &Instance,
+    instance_dir: &Path,
+    class: &str,
+) -> Option<ClassOwner> {
+    let slashed = class.trim().replace('.', "/");
+    let segs: Vec<&str> =
+        slashed.split('/').filter(|s| !s.is_empty()).collect();
+    if segs.len() < 3 {
+        return None; // need at least `a/b/Class` — a 2-segment name has no pkg
+    }
+    let pkg_depth = segs.len() - 1; // exclude the final class-name segment
+
+    let mut best: Option<ClassOwner> = None;
+    for m in &inst.mods {
+        let jar = instance_dir.join(&m.path);
+        let Ok(f) = std::fs::File::open(&jar) else {
+            continue;
+        };
+        let Ok(mut z) = zip::ZipArchive::new(f) else {
+            continue;
+        };
+        // Entry names first (immutable borrow), then the mod id (mutable).
+        let names: Vec<String> =
+            z.file_names().map(str::to_string).collect();
+        // Deepest package prefix (≥2 segments) some `.class` entry shares.
+        let mut hit: Option<usize> = None;
+        for plen in (2..=pkg_depth).rev() {
+            let prefix = format!("{}/", segs[..plen].join("/"));
+            if names
+                .iter()
+                .any(|n| n.ends_with(".class") && n.starts_with(&prefix))
+            {
+                hit = Some(plen);
+                break;
+            }
+        }
+        let Some(depth) = hit else { continue };
+        if best.as_ref().map(|b| depth > b.depth).unwrap_or(true) {
+            let mod_id = jar_fabric_id(&mut z)
+                .unwrap_or_else(|| filename_namespace(&m.path));
+            best = Some(ClassOwner { mod_id, depth });
+        }
+    }
+    best
+}
+
+/// The mod's own `id` from its `fabric.mod.json`, if readable.
+fn jar_fabric_id<R: Read + std::io::Seek>(
+    z: &mut zip::ZipArchive<R>,
+) -> Option<String> {
+    let mut s = String::new();
+    z.by_name("fabric.mod.json")
+        .ok()?
+        .read_to_string(&mut s)
+        .ok()?;
+    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    v.get("id")?.as_str().map(str::to_string)
+}
+
+// ---------------------------------------------------------------------------
 // Jar scan
 // ---------------------------------------------------------------------------
 
@@ -1079,6 +1172,161 @@ mod tests {
         assert_eq!(v.mod_meta.len(), 1);
         assert_eq!(v.mod_meta[0].id, "testmod");
         assert_eq!(v.mod_meta[0].name, "Test Mod");
+    }
+
+    // ---- class -> mod attribution (Fix 4) -------------------------------
+    fn pinned(path: &str) -> crate::instance::PinnedMod {
+        crate::instance::PinnedMod {
+            project_id: String::new(),
+            version_id: String::new(),
+            name: path.to_string(),
+            path: path.to_string(),
+            sha1: String::new(),
+            sha512: String::new(),
+            download_url: String::new(),
+            file_size: 0,
+            client_side: "required".into(),
+            server_side: "required".into(),
+        }
+    }
+    fn inst_with(mods: Vec<crate::instance::PinnedMod>) -> Instance {
+        Instance {
+            id: "t".into(),
+            name: "T".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0".into(),
+            created: String::new(),
+            last_played: None,
+            mods,
+            roots: vec![],
+        }
+    }
+
+    /// Real vinery shape: doapi IS installed (ships `de/cristelknight/doapi/…`)
+    /// but lacks the specific missing class → attributed to doapi (version skew,
+    /// repin), NOT a removal of unrelated mods.
+    #[test]
+    fn attribution_present_jar_owns_missing_class() {
+        let dir = tempfile::tempdir().unwrap();
+        make_jar(
+            &dir.path().join("doapi.jar"),
+            &[
+                ("fabric.mod.json", r#"{"id":"doapi"}"#),
+                ("de/cristelknight/doapi/DoApi.class", "x"),
+                ("de/cristelknight/doapi/registry/Boats.class", "x"),
+            ],
+        );
+        let inst = inst_with(vec![pinned("doapi.jar")]);
+        let owner = attribute_class_to_mod(
+            &inst,
+            dir.path(),
+            "de/cristelknight/doapi/DoApiExpectPlatform", // the MISSING class
+        )
+        .expect("doapi owns the package");
+        assert_eq!(owner.mod_id, "doapi");
+        assert!(owner.depth >= 3);
+    }
+
+    /// Real another_furniture / create_dd shape: a present `create` jar owns
+    /// `com/simibubi/create/…`; the missing inner API class attributes to it.
+    #[test]
+    fn attribution_create_api_class() {
+        let dir = tempfile::tempdir().unwrap();
+        make_jar(
+            &dir.path().join("create.jar"),
+            &[
+                ("fabric.mod.json", r#"{"id":"create"}"#),
+                ("com/simibubi/create/Create.class", "x"),
+                ("com/simibubi/create/content/Stuff.class", "x"),
+            ],
+        );
+        let inst = inst_with(vec![pinned("create.jar")]);
+        let owner = attribute_class_to_mod(
+            &inst,
+            dir.path(),
+            "com.simibubi.create.api.behaviour.interaction.MovingInteractionBehaviour",
+        )
+        .expect("create owns com.simibubi.create");
+        assert_eq!(owner.mod_id, "create");
+    }
+
+    /// Real villagernames shape: the consumer expects `dev.mrsterner.guard…`
+    /// but the installed Guard Villagers ships the renamed `dev.sterner.guard…`
+    /// package → NO present jar owns it → `None` (absent ⇒ add/swap, not repin).
+    #[test]
+    fn attribution_absent_when_package_renamed() {
+        let dir = tempfile::tempdir().unwrap();
+        make_jar(
+            &dir.path().join("guardvillagers.jar"),
+            &[
+                ("fabric.mod.json", r#"{"id":"guardvillagers"}"#),
+                ("dev/sterner/guardvillagers/GuardEntity.class", "x"),
+            ],
+        );
+        let inst = inst_with(vec![pinned("guardvillagers.jar")]);
+        let owner = attribute_class_to_mod(
+            &inst,
+            dir.path(),
+            "dev/mrsterner/guardvillagers/common/entity/GuardEntity",
+        );
+        assert!(owner.is_none(), "renamed package must not match: {owner:?}");
+    }
+
+    /// The DEEPEST package match wins over a shallow shaded/relocated one.
+    #[test]
+    fn attribution_deepest_match_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        make_jar(
+            &dir.path().join("shallow.jar"),
+            &[
+                ("fabric.mod.json", r#"{"id":"shallow"}"#),
+                ("com/foo/Unrelated.class", "x"), // matches only com/foo
+            ],
+        );
+        make_jar(
+            &dir.path().join("deep.jar"),
+            &[
+                ("fabric.mod.json", r#"{"id":"deep"}"#),
+                ("com/foo/bar/baz/Thing.class", "x"),
+            ],
+        );
+        let inst = inst_with(vec![pinned("shallow.jar"), pinned("deep.jar")]);
+        let owner =
+            attribute_class_to_mod(&inst, dir.path(), "com.foo.bar.baz.Missing")
+                .expect("deep jar owns the deeper package");
+        assert_eq!(owner.mod_id, "deep");
+    }
+
+    /// A bare two-segment class name has no package to own → `None` (never lets
+    /// a shallow match claim ownership of everything).
+    #[test]
+    fn attribution_two_segment_name_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        make_jar(
+            &dir.path().join("m.jar"),
+            &[("fabric.mod.json", r#"{"id":"m"}"#), ("Foo/Bar.class", "x")],
+        );
+        let inst = inst_with(vec![pinned("m.jar")]);
+        assert!(attribute_class_to_mod(&inst, dir.path(), "Foo.Bar").is_none());
+    }
+
+    /// Falls back to the filename namespace when a jar has no fabric.mod.json.
+    #[test]
+    fn attribution_falls_back_to_filename_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        make_jar(
+            &dir.path().join("adorn-1.2.3.jar"),
+            &[("juuxel/adorn/block/Variant.class", "x")],
+        );
+        let inst = inst_with(vec![pinned("adorn-1.2.3.jar")]);
+        let owner = attribute_class_to_mod(
+            &inst,
+            dir.path(),
+            "juuxel/adorn/block/variant/BlockVariantSets",
+        )
+        .expect("matches by package even without fabric.mod.json");
+        assert_eq!(owner.mod_id, "adorn"); // filename_namespace("adorn-1.2.3.jar")
     }
 
     #[test]

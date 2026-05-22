@@ -2724,6 +2724,24 @@ a {
   padding: 1px 8px;
 }
 
+/* Active toggle: G-key triggered skill — accent colour so the player
+ * picks it out of the wall of passives. */
+.origins-power.kind-active {
+  border-color: var(--accent-edge);
+  background: var(--accent-tint);
+}
+.origins-power.kind-active .origins-power-badge {
+  color: var(--accent-press);
+  border-color: var(--accent-edge);
+  background: var(--bg);
+}
+/* Reactive (on-hit / on-kill auto-trigger): subtler than active but still
+ * distinguishable from pure passives. */
+.origins-power.kind-reactive .origins-power-badge {
+  color: var(--accent-press);
+  border-color: var(--accent-edge);
+}
+
 .origins-power-desc {
   margin-top: 5px;
   font-family: var(--mono);
