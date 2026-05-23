@@ -102,7 +102,7 @@ How you work:
 - Only AFTER verify_pack passes do you present the pack: briefly confirm what was built, that it boots cleanly, and where it lives, then ask about quests. If the gate ended EXHAUSTED, lead with exactly what will not boot and what you tried — never a "ready!" summary for a pack that does not launch.
 - If the player wants a storyline, quests, or a sense of progression, the quest system is Heracles (published on Modrinth as "Odyssey Quests", slug odyssey-quests). Quests require the pack to be Minecraft 1.20.1 on Fabric, and the pack must include both odyssey-quests and its dependency resourceful-lib. So: tell the player quests need a 1.20.1 Fabric pack and steer the version there if not set, search_mods for "odyssey-quests" and "resourceful-lib" and include both real mods, build the pack first, then add quests. After assembly, the instance id and full mod list are given to you in an ACTIVE PACK STATE block at the top of the conversation — call generate_quests with THAT instance id directly. Never call assemble_pack again just to rediscover the instance id. If a pack is already assembled and the player asks for quests, the pack must PASS verify_pack first — your next tool call is verify_pack; the quest/origin tools only become available once it verifies. Never propose_pack or assemble_pack to get there.
 - Custom recipes that knit the pinned mods together (one mod's output feeding another mod's recipe, new crafting/smelting bridges) are also part of progression, and they are quest NODES, not a separate system: a quest node may carry a "recipes" array, which makes it a quest to obtain the bridged item AND injects the recipe into a vanilla 1.20.1 datapack loaded by Open Loader. If the player wants custom recipes or cross-mod crafting, the pack MUST include open-loader (Modrinth slug open-loader; 1.20.1 Fabric); search_mods for "open-loader" and include the real mod, build the pack first, then design recipe-bridge nodes inside generate_quests.
-- Quests, recipes, and origins are DESIGNED LATER, in the progression phase (only after verify_pack passes, with its own detailed brief and tools). Do not design the quest graph now. Your only job here is to make sure the pack INCLUDES the mods that progression needs: odyssey-quests + resourceful-lib for quests, and open-loader for custom recipes (above).
+- Quests, recipes, and origins are DESIGNED LATER, in the progression phase (only after verify_pack passes, with its own detailed brief and tools). Do not design the quest graph now. Your only job here is to make sure the pack INCLUDES the mods that progression needs: odyssey-quests + resourceful-lib for quests, and Origins core for origins. You do NOT need to add open-loader by hand: assemble_pack auto-includes it (with its dependencies) whenever the assembled pack contains the quest engine or Origins core, since quests, recipes, bosses, and origins all load their datapacks through it.
 - Quality-of-life baseline (always raise this, and heavily suggest it). Early in the conversation, once you know the Minecraft version and loader, ask the player whether to include a standard quality-of-life and performance set, and strongly recommend saying yes (default to including it unless they decline). Fold it into the conversation as one light question, not a checklist. The set is: a recipe/item viewer (MANDATORY — see below), a minimap and a world map (Xaero's Minimap and Xaero's World Map), AppleSkin (food and saturation tooltips), Controlling (searchable keybinds), an inventory sorting mod, Mouse Tweaks, and a loader-appropriate performance stack that is compatible with content mods (on Fabric or Quilt: Sodium, plus Indium whenever the pack needs the Fabric Rendering API, plus Lithium, FerriteCore, and Entity Culling; on Forge or NeoForge the equivalents such as Embeddium or Rubidium, FerriteCore, and an entity-culling mod). Never use OptiFine, which breaks content mods. A recipe/item viewer is NOT optional and is NOT subject to the player declining the QoL set: EVERY pack that contains any crafting or machine content mod MUST include one, because without it the player literally cannot discover recipes (tech mods like Modern Industrialization, Tech Reborn, Create, AE2 are unusable without it). Always include EMI (the most broadly compatible viewer and the one tech mods explicitly recommend); JEI or REI are acceptable only if EMI has no compatible build for this version/loader. Search_mods for it and include it even if the player declined everything else. Mod names change between versions and loaders, so search_mods for the current mod that fills each role for THIS version and loader (for example the modern inventory-sorting mod is not the legacy 1.12 "Inventory Tweaks"); include only ones that actually exist and are compatible, skip any OTHER role with no good option for this version (but never skip the recipe viewer), and tell the player exactly which QoL mods you added. If the player signals weak or low-end hardware or a laptop, include the performance stack regardless and say so plainly.
 - Keep seed_from_pack natural. If the player points at an existing pack or asks for something like a known pack, use seed_from_pack to ground the build on a real pack, then adapt it with search_mods rather than copying it wholesale.
 - Be efficient with tools and converge decisively. In a single turn, issue several search_mods or get_mod calls together rather than one at a time. Do not search endlessly or narrate every step. Size the pack to the request: a focused pack is roughly 15 to 35 mods; a kitchen-sink or "as many as possible" request can be larger, but it is a curated set of quality mods, not a race to a number. Once you have a coherent set that covers the player's theme well, stop searching and call assemble_pack (it resolves deps + repins versions and ALWAYS builds). Do not keep searching to inflate the count, and do not re-assemble repeatedly chasing a bigger number; if the player asks for more after seeing a pack, add a few specific quality mods and re-assemble once. You have a hard limit on tool rounds, so converge and assemble well before you reach it; a good assembled pack now beats a perfect one that never finishes.
@@ -4141,6 +4141,103 @@ pub(crate) async fn verify_gate(
      */
 }
 
+/// True iff the resolved set ships content that loads through Open Loader:
+/// a quest engine (Heracles / Odyssey Quests, whose recipe + content-boss
+/// datapacks live under `config/openloader/data/...`) or Origins core (its
+/// powers datapack does too). Such a pack MUST also contain Open Loader or the
+/// generated content silently never loads.
+fn pack_needs_open_loader(entries: &[pack::ModEntry]) -> bool {
+    entries.iter().any(|e| {
+        let p = e.path.to_ascii_lowercase();
+        p.contains("heracles")
+            || p.contains("odyssey")
+            || crate::origins::is_origins_core(&e.project_id, &e.path)
+    })
+}
+
+/// True iff Open Loader (Modrinth slug `open-loader`) is already in the set.
+fn pack_has_open_loader(entries: &[pack::ModEntry]) -> bool {
+    entries.iter().any(|e| {
+        let p = e.path.to_ascii_lowercase();
+        p.contains("open-loader") || p.contains("openloader")
+    })
+}
+
+/// Resolve Open Loader to a concrete {project_id, version_id} compatible with
+/// this pack's MC + loader — stable release first, then newest — mirroring the
+/// edit_pack add-resolution. Returns None if Modrinth is unreachable or no
+/// compatible version exists (a best-effort safety net; the model is also told
+/// to include it).
+async fn resolve_open_loader_ref(mr: &Modrinth, mc: &str, loader: &str) -> Option<ModRef> {
+    let mut vcache: VersionCache = std::collections::HashMap::new();
+    let versions = cached_versions(mr, &mut vcache, "open-loader").await.ok()?.clone();
+    let best = versions
+        .iter()
+        .filter(|v| {
+            to_resolved(v, "required", "required")
+                .map(|rv| pack::version_compatible(&rv, mc, loader))
+                .unwrap_or(false)
+        })
+        .min_by(|x, y| {
+            vt_rank(&x.version_type)
+                .cmp(&vt_rank(&y.version_type))
+                .then(y.date_published.cmp(&x.date_published))
+                .then(x.id.cmp(&y.id))
+        })?;
+    Some(ModRef {
+        project_id: best.project_id.clone(),
+        version_id: best.id.clone(),
+    })
+}
+
+#[cfg(test)]
+mod open_loader_gate_tests {
+    use super::*;
+
+    fn me(project_id: &str, path: &str) -> pack::ModEntry {
+        pack::ModEntry {
+            project_id: project_id.into(),
+            version_id: "v".into(),
+            path: path.into(),
+            sha1: String::new(),
+            sha512: String::new(),
+            downloads: vec![],
+            file_size: 0,
+            game_versions: vec!["1.20.1".into()],
+            loaders: vec!["fabric".into()],
+            client_side: "required".into(),
+            server_side: "required".into(),
+        }
+    }
+
+    #[test]
+    fn quests_or_origins_require_open_loader_unless_already_present() {
+        // Heracles (Odyssey Quests) jar -> needs Open Loader, doesn't have it.
+        let quests = vec![me("AAA", "mods/Heracles-fabric-1.20.1-2.4.2.jar")];
+        assert!(pack_needs_open_loader(&quests));
+        assert!(!pack_has_open_loader(&quests));
+
+        // Origins core (by canonical project id) -> needs Open Loader.
+        let origins = vec![me("3BeIrqZR", "mods/origins-1.20.1.jar")];
+        assert!(pack_needs_open_loader(&origins));
+
+        // Apoli/Calio are Origins LIBS, not core -> must NOT trip the gate.
+        let libs = vec![me("X", "mods/apoli-2.9.2.jar"), me("Y", "mods/calio-1.11.2.jar")];
+        assert!(!pack_needs_open_loader(&libs));
+
+        // A plain pack needs nothing.
+        assert!(!pack_needs_open_loader(&[me("S", "mods/sodium-fabric.jar")]));
+
+        // Already shipping Open Loader -> gate satisfied, no add.
+        let with_ol = vec![
+            me("AAA", "mods/Heracles-fabric-1.20.1.jar"),
+            me("OL", "mods/openloader-fabric-1.20.1.jar"),
+        ];
+        assert!(pack_needs_open_loader(&with_ol));
+        assert!(pack_has_open_loader(&with_ol));
+    }
+}
+
 async fn tool_assemble_pack(
     mr: &Modrinth,
     thread_id: Option<&str>,
@@ -4198,7 +4295,7 @@ async fn tool_assemble_pack(
         .into_iter()
         .find(|i| i.name.eq_ignore_ascii_case(&name));
     let merging = existing.is_some() && !replace;
-    let refs = merge_roots(
+    let mut refs = merge_roots(
         refs,
         existing.iter().flat_map(|e| {
             e.mods.iter().map(|m| ModRef {
@@ -4222,8 +4319,26 @@ async fn tool_assemble_pack(
     // Resolve the full transitive required-dependency closure. `entries` now
     // carries every required library automatically; the model never has to
     // hand-add bookshelf / lithostitched / yungsapi etc.
-    let (entries, dep_issues) =
+    let (mut entries, mut dep_issues) =
         pump(resolve_pack(mr, &refs, &mc_version, &loader), tx, "assemble_pack").await?;
+
+    // Open Loader is REQUIRED whenever the pack ships quests or origins: both
+    // load their datapacks through `config/openloader/data/...`. If the resolved
+    // set has a quest engine (Heracles) or Origins core but no Open Loader, add
+    // it as a ROOT and re-resolve so its OWN dependency closure comes too
+    // ("fully added"). As a root it persists and is never auto-removed later.
+    // The curating prompt also tells the model to include it; this guarantees it
+    // deterministically regardless.
+    if pack_needs_open_loader(&entries) && !pack_has_open_loader(&entries) {
+        if let Some(ol) = resolve_open_loader_ref(mr, &mc_version, &loader).await {
+            refs.push(ol);
+            tool_chip(tx, "assemble_pack", "added Open Loader (required by quests/origins)");
+            let (e2, d2) =
+                pump(resolve_pack(mr, &refs, &mc_version, &loader), tx, "assemble_pack").await?;
+            entries = e2;
+            dep_issues = d2;
+        }
+    }
 
     // Never assemble an invalid pack: validate the WHOLE closure as the final
     // gate (per-entry checks + unresolved/incompatible dependency issues).
